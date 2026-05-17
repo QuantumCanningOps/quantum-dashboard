@@ -6,6 +6,7 @@ import { Suspense } from "react";
 
 const navLinks = [
   { href: "/dashboard", label: "Overview" },
+  { href: "/dashboard/production", label: "Production" },
   { href: "/dashboard/lots", label: "Lots" },
   { href: "/dashboard/inventory/summary", label: "Inventory" },
   { href: "/dashboard/inventory", label: "Lot Detail" },
