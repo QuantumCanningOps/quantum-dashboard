@@ -45,7 +45,7 @@ async function ProductionDetail({ params }: DetailPageProps) {
   const [{ data: order }, { data: lines }] = await Promise.all([
     supabase
       .from("production_orders")
-      .select("*, clients(name, code), skus(code, name)")
+      .select("*, clients(name, code), skus(code, name), tanks(name)")
       .eq("id", id)
       .single(),
     supabase
@@ -62,6 +62,7 @@ async function ProductionDetail({ params }: DetailPageProps) {
   const itemIds = orderLines.map((l) => l.item_id);
   const client = order.clients as unknown as { name: string; code: string } | null;
   const sku = order.skus as unknown as { name: string; code: string } | null;
+  const tank = order.tanks as unknown as { name: string } | null;
 
   const { data: summaryRows } = itemIds.length
     ? await supabase
@@ -122,7 +123,7 @@ async function ProductionDetail({ params }: DetailPageProps) {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -162,13 +163,25 @@ async function ProductionDetail({ params }: DetailPageProps) {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Scheduled
+              Tank
             </CardTitle>
           </CardHeader>
           <CardContent>
             <span className="text-2xl font-bold">
-              {order.scheduled_date
-                ? new Date(order.scheduled_date).toLocaleDateString(undefined, {
+              {tank?.name ?? "—"}
+            </span>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Batching
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <span className="text-2xl font-bold">
+              {order.batching_date
+                ? new Date(order.batching_date).toLocaleDateString(undefined, {
                     month: "short",
                     day: "numeric",
                   })
@@ -179,11 +192,18 @@ async function ProductionDetail({ params }: DetailPageProps) {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Lines
+              Canning
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <span className="text-2xl font-bold">{orderLines.length}</span>
+            <span className="text-2xl font-bold">
+              {order.canning_date
+                ? new Date(order.canning_date).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                  })
+                : "—"}
+            </span>
           </CardContent>
         </Card>
       </div>

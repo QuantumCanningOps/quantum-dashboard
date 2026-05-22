@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 export type ProductionOrderRow = {
   id: string;
@@ -9,22 +10,28 @@ export type ProductionOrderRow = {
   planned_quantity: number;
   actual_quantity: number | null;
   unit_of_measure: string;
-  scheduled_date: string | null;
+  batching_date: string | null;
+  canning_date: string | null;
   status: string;
   notes: string | null;
   clients: { name: string; code: string } | null;
   skus: { code: string; name: string } | null;
+  tanks: { name: string } | null;
 };
 
 export function ProductionOrdersTable({
   orders,
+  hoveredId,
+  onHoverChange,
 }: {
   orders: ProductionOrderRow[];
+  hoveredId?: string | null;
+  onHoverChange?: (id: string | null) => void;
 }) {
   const router = useRouter();
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto selection:bg-blue-700 selection:text-white">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b text-muted-foreground">
@@ -32,68 +39,80 @@ export function ProductionOrdersTable({
             <th className="pb-2 text-left font-medium">Client</th>
             <th className="pb-2 text-left font-medium">Product</th>
             <th className="pb-2 text-right font-medium">Planned</th>
-            <th className="pb-2 text-right font-medium">Actual</th>
-            <th className="pb-2 text-left font-medium">Scheduled</th>
+            <th className="pb-2 text-left font-medium">Tank</th>
+            <th className="pb-2 text-left font-medium">Batching</th>
+            <th className="pb-2 text-left font-medium">Canning</th>
             <th className="pb-2 text-left font-medium">Status</th>
-            <th className="pb-2 text-left font-medium">Notes</th>
           </tr>
         </thead>
         <tbody>
-          {orders.map((order) => (
-            <tr
-              key={order.id}
-              onClick={() => router.push(`/dashboard/production/${order.id}`)}
-              className="cursor-pointer border-b last:border-0 hover:bg-muted/30"
-            >
-              <td className="py-2 pr-4 font-mono text-xs font-medium">
-                {order.order_number}
-              </td>
-              <td className="py-2 pr-4 text-muted-foreground">
-                {order.clients?.name ?? "—"}
-              </td>
-              <td className="py-2 pr-4">
-                {order.skus ? (
-                  <span>
-                    <span className="font-medium">{order.skus.name}</span>
-                    <span className="ml-1.5 font-mono text-xs text-muted-foreground">
-                      {order.skus.code}
-                    </span>
-                  </span>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
+          {orders.map((order) => {
+            const isHighlighted = hoveredId === order.id;
+            const mutedTextClass = isHighlighted
+              ? "text-blue-950"
+              : "text-muted-foreground";
+            const secondaryTextClass = isHighlighted
+              ? "text-blue-900"
+              : "text-muted-foreground";
+            return (
+              <tr
+                key={order.id}
+                onClick={() => router.push(`/dashboard/production/${order.id}`)}
+                onMouseEnter={() => onHoverChange?.(order.id)}
+                onMouseLeave={() => onHoverChange?.(null)}
+                className={cn(
+                  "cursor-pointer border-b last:border-0",
+                  isHighlighted ? "bg-blue-50 text-blue-950" : "hover:bg-muted/30"
                 )}
-              </td>
-              <td className="py-2 pr-4 text-right tabular-nums">
-                {Number(order.planned_quantity).toLocaleString()}{" "}
-                <span className="text-muted-foreground">
-                  {order.unit_of_measure}
-                </span>
-              </td>
-              <td className="py-2 pr-4 text-right tabular-nums">
-                {order.actual_quantity != null ? (
-                  <span>
-                    {Number(order.actual_quantity).toLocaleString()}{" "}
-                    <span className="text-muted-foreground">
-                      {order.unit_of_measure}
+              >
+                <td className="py-2 pr-4 font-mono text-xs font-medium">
+                  {order.order_number}
+                </td>
+                <td className={cn("py-2 pr-4", mutedTextClass)}>
+                  {order.clients?.name ?? "—"}
+                </td>
+                <td className="py-2 pr-4">
+                  {order.skus ? (
+                    <span>
+                      <span className="font-medium">{order.skus.name}</span>
+                      <span
+                        className={cn(
+                          "ml-1.5 font-mono text-xs",
+                          secondaryTextClass
+                        )}
+                      >
+                        {order.skus.code}
+                      </span>
                     </span>
+                  ) : (
+                    <span className={mutedTextClass}>—</span>
+                  )}
+                </td>
+                <td className="py-2 pr-4 text-right tabular-nums">
+                  {Number(order.planned_quantity).toLocaleString()}{" "}
+                  <span className={secondaryTextClass}>
+                    {order.unit_of_measure}
                   </span>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
-              </td>
-              <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">
-                {order.scheduled_date
-                  ? new Date(order.scheduled_date).toLocaleDateString()
-                  : "—"}
-              </td>
-              <td className="py-2 pr-4">
-                <StatusBadge status={order.status} />
-              </td>
-              <td className="py-2 max-w-xs truncate text-muted-foreground text-xs">
-                {order.notes ?? ""}
-              </td>
-            </tr>
-          ))}
+                </td>
+                <td className={cn("py-2 pr-4", mutedTextClass)}>
+                  {order.tanks?.name ?? "—"}
+                </td>
+                <td className={cn("py-2 pr-4 whitespace-nowrap", mutedTextClass)}>
+                  {order.batching_date
+                    ? new Date(order.batching_date).toLocaleDateString()
+                    : "—"}
+                </td>
+                <td className={cn("py-2 pr-4 whitespace-nowrap", mutedTextClass)}>
+                  {order.canning_date
+                    ? new Date(order.canning_date).toLocaleDateString()
+                    : "—"}
+                </td>
+                <td className="py-2 pr-4">
+                  <StatusBadge status={order.status} />
+                </td>
+              </tr>
+            );
+          })}
           {orders.length === 0 && (
             <tr>
               <td

@@ -1,11 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Suspense } from "react";
-import { ProductionFilters } from "./ProductionFilters";
-import {
-  ProductionOrdersTable,
-  type ProductionOrderRow,
-} from "./ProductionOrdersTable";
+import { ProductionView } from "./ProductionView";
+import type { ProductionOrderRow } from "./ProductionOrdersTable";
 
 type ProductionPageProps = {
   searchParams?: Promise<{
@@ -45,8 +42,8 @@ async function ProductionTable({ searchParams }: ProductionPageProps) {
 
   let query = supabase
     .from("production_orders")
-    .select("*, clients(name, code), skus(code, name)")
-    .order("scheduled_date", { ascending: false, nullsFirst: false })
+    .select("*, clients(name, code), skus(code, name), tanks(name)")
+    .order("batching_date", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false });
 
   if (clientId) query = query.eq("client_id", clientId);
@@ -128,20 +125,13 @@ async function ProductionTable({ searchParams }: ProductionPageProps) {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Orders</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <ProductionFilters
-            clientId={clientId}
-            status={status}
-            q={q}
-            clients={(clients ?? []) as Client[]}
-          />
-          <ProductionOrdersTable orders={filteredOrders} />
-        </CardContent>
-      </Card>
+      <ProductionView
+        orders={filteredOrders}
+        clients={(clients ?? []) as Client[]}
+        clientId={clientId}
+        status={status}
+        q={q}
+      />
     </div>
   );
 }
@@ -167,6 +157,8 @@ function ProductionFallback() {
           </Card>
         ))}
       </div>
+      <div className="h-40 w-full animate-pulse rounded-lg bg-muted" />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Orders</CardTitle>
