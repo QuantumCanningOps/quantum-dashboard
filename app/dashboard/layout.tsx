@@ -12,6 +12,7 @@ const navLinks = [
   { href: "/dashboard/inventory/summary", label: "Inventory" },
   { href: "/dashboard/inventory", label: "Lot Detail" },
   { href: "/dashboard/clients", label: "Clients" },
+  { href: "/dashboard/documents", label: "Documents" },
 ];
 
 export default function DashboardLayout({
