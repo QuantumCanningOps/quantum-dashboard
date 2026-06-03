@@ -122,7 +122,14 @@ async function DocumentsContent() {
                     const tpl = doc.third_party_logistics as unknown as { name: string; code: string } | null;
                     const bolLots = (doc.document_lots as unknown as { lots: { lot_number: string; items: { name: string } | null } }[]) ?? [];
 
-                    const related = buildRelatedLabel(doc.document_type, lot, formula, tpl, bolLots, (doc as unknown as { carrier_name: string | null }).carrier_name);
+                    const related = buildRelatedLabel(
+                      doc.document_type,
+                      lot,
+                      formula,
+                      tpl,
+                      bolLots,
+                      (doc as unknown as { carrier_name: string | null }).carrier_name
+                    );
 
                     return (
                       <tr

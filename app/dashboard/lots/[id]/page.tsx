@@ -326,7 +326,6 @@ async function LotDetailContent({
               )}
             </CardContent>
           </Card>
-
           {(history?.length ?? 0) > 0 && (
             <Card>
               <CardHeader>

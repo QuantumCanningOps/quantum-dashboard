@@ -77,7 +77,7 @@ export function UploadDialog({
   const [lotId, setLotId] = useState("");
   const [formulaId, setFormulaId] = useState("");
   const [tplId, setTplId] = useState("");
-  const [carrierName, setShipperName] = useState("");
+  const [carrierName, setCarrierName] = useState("");
   const [selectedLotIds, setSelectedLotIds] = useState<Set<string>>(new Set());
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -89,7 +89,7 @@ export function UploadDialog({
     setLotId("");
     setFormulaId("");
     setTplId("");
-    setShipperName("");
+    setCarrierName("");
     setSelectedLotIds(new Set());
     setFile(null);
     setError(null);
@@ -103,7 +103,11 @@ export function UploadDialog({
   function toggleLot(id: string) {
     setSelectedLotIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   }
@@ -189,7 +193,7 @@ export function UploadDialog({
               setLotId("");
               setFormulaId("");
               setTplId("");
-              setShipperName("");
+              setCarrierName("");
               setSelectedLotIds(new Set());
             }}
           >
@@ -253,7 +257,7 @@ export function UploadDialog({
                 id="doc-carrier"
                 placeholder="e.g. FedEx Freight, UPS, XPO Logistics"
                 value={carrierName}
-                onChange={(e) => setShipperName(e.target.value)}
+                onChange={(e) => setCarrierName(e.target.value)}
               />
             </div>
 
