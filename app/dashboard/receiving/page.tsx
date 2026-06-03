@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { ReceivingFilters } from "./ReceivingFilters";
 import Link from "next/link";
 import { Suspense } from "react";
@@ -148,7 +149,12 @@ async function ReceivingLog({ searchParams }: ReceivingPageProps) {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-bold">Receiving Log</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Receiving Log</h1>
+        <Button asChild>
+          <Link href="/dashboard/receiving/new">New Receipt</Link>
+        </Button>
+      </div>
 
       <div className="grid grid-cols-4 gap-4">
         <Card>
@@ -325,7 +331,10 @@ async function ReceivingLog({ searchParams }: ReceivingPageProps) {
 function ReceivingFallback() {
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-bold">Receiving Log</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Receiving Log</h1>
+        <div className="h-9 w-32 animate-pulse rounded-md bg-muted" />
+      </div>
 
       <div className="grid grid-cols-4 gap-4">
         {["Receipts", "Unique Items", "Clients", "BOL on File"].map((label) => (

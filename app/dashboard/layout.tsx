@@ -14,6 +14,7 @@ const navLinks = [
   { href: "/dashboard/receiving", label: "Receiving" },
   { href: "/dashboard/clients", label: "Clients" },
   { href: "/dashboard/documents", label: "Documents" },
+  { href: "/dashboard/needs-attention", label: "Needs Attention" },
 ];
 
 export default function DashboardLayout({
