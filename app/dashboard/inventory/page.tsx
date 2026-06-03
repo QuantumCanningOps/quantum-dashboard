@@ -165,6 +165,18 @@ async function InventoryTable({ searchParams }: InventoryPageProps) {
     ? inventoryRows.filter((row) => inventoryRowMatchesSearch(row, filters.q))
     : inventoryRows;
 
+  const uniqueLotIds = [...new Set(rows.map((r) => r.lot_id))];
+  const { data: coaDocs } =
+    uniqueLotIds.length > 0
+      ? await supabase
+          .from("documents")
+          .select("id, lot_id")
+          .in("lot_id", uniqueLotIds)
+          .eq("document_type", "coa")
+      : { data: [] as { id: string; lot_id: string }[] };
+
+  const coaByLotId = new Map((coaDocs ?? []).map((d) => [d.lot_id, d.id]));
+
   const isFiltered = hasActiveFilters(filters);
   const totalRows = rows.length;
   const quarantineRows = rows.filter((r) => r.lot_status === "quarantine").length;
@@ -308,6 +320,7 @@ async function InventoryTable({ searchParams }: InventoryPageProps) {
                   <th className="pb-2 text-left font-medium">Client</th>
                   <th className="pb-2 text-left font-medium">Supplier</th>
                   <th className="pb-2 text-left font-medium">Lot #</th>
+                  <th className="pb-2 text-left font-medium">CoA</th>
                   <th className="pb-2 text-left font-medium">Location</th>
                   <th className="pb-2 text-left font-medium">Zone</th>
                   <th className="pb-2 text-left font-medium">Status</th>
@@ -343,7 +356,31 @@ async function InventoryTable({ searchParams }: InventoryPageProps) {
                       )}
                     </td>
                     <td className="py-2 pr-4 font-mono text-xs">
-                      {row.lot_number}
+                      <Link
+                        href={`/dashboard/lots/${row.lot_id}`}
+                        className="hover:underline text-foreground"
+                      >
+                        {row.lot_number}
+                      </Link>
+                    </td>
+                    <td className="py-2 pr-4">
+                      {coaByLotId.has(row.lot_id) ? (
+                        <Link
+                          href={`/dashboard/documents/${coaByLotId.get(row.lot_id)}/view`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-teal-700 hover:underline font-medium"
+                        >
+                          View
+                        </Link>
+                      ) : (
+                        <Link
+                          href={`/dashboard/lots/${row.lot_id}`}
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          No CoA
+                        </Link>
+                      )}
                     </td>
                     <td className="py-2 pr-4 text-muted-foreground">
                       {row.location_label ?? "—"}
@@ -381,7 +418,7 @@ async function InventoryTable({ searchParams }: InventoryPageProps) {
                 {rows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={10}
+                      colSpan={11}
                       className="py-8 text-center text-sm text-muted-foreground"
                     >
                       No inventory on hand for this selection.

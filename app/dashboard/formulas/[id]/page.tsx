@@ -45,7 +45,7 @@ async function FormulaDetail({ params }: FormulaPageProps) {
     supabase
       .from("formulas")
       .select(
-        "id, client_id, version, base_quantity, base_unit_of_measure, batching_instructions, status, notes, created_at, clients(name, code)"
+        "id, client_id, formula_number, name, version, base_quantity, base_unit_of_measure, batching_instructions, status, notes, created_at, clients(name, code)"
       )
       .eq("id", id)
       .single(),
@@ -89,11 +89,13 @@ async function FormulaDetail({ params }: FormulaPageProps) {
         </Link>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-bold">
-            {skus?.[0]?.name ?? "Formula"}
+            {formula.name ?? skus?.[0]?.name ?? "Formula"}
           </h1>
-          <Badge className="bg-slate-100 text-slate-600 border-slate-200 font-mono">
-            {skus?.[0]?.code ?? client?.code}
-          </Badge>
+          {formula.formula_number && (
+            <Badge className="bg-slate-100 text-slate-600 border-slate-200 font-mono">
+              {formula.formula_number}
+            </Badge>
+          )}
           <FormulaStatusBadge status={formula.status} />
         </div>
         <p className="text-sm text-muted-foreground">
