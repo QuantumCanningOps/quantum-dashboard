@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Suspense } from "react";
+import Link from "next/link";
 
 export default function LotsPage() {
   return (
@@ -20,7 +21,8 @@ async function LotsTable() {
       `id, lot_number, status, received_at, expiration_date, po_number, notes,
        items(name, item_type, unit_of_measure),
        clients(name, code),
-       suppliers(name)`
+       suppliers(name),
+       documents!lot_id(id, document_type)`
     )
     .order("received_at", { ascending: false });
 
@@ -44,6 +46,7 @@ async function LotsTable() {
                   <th className="pb-2 text-left font-medium">Client</th>
                   <th className="pb-2 text-left font-medium">Supplier</th>
                   <th className="pb-2 text-left font-medium">Status</th>
+                  <th className="pb-2 text-left font-medium">CoA</th>
                   <th className="pb-2 text-right font-medium">Received</th>
                   <th className="pb-2 text-right font-medium">Expires</th>
                 </tr>
@@ -60,11 +63,18 @@ async function LotsTable() {
                     code: string;
                   } | null;
                   const supplier = lot.suppliers as unknown as { name: string } | null;
+                  const docs = (lot.documents as unknown as { id: string; document_type: string }[]) ?? [];
+                  const coa = docs.find((d) => d.document_type === "coa");
 
                   return (
                     <tr key={lot.id} className="border-b last:border-0 hover:bg-muted/30">
                       <td className="py-2 pr-4 font-mono text-xs whitespace-nowrap">
-                        {lot.lot_number}
+                        <Link
+                          href={`/dashboard/lots/${lot.id}`}
+                          className="hover:underline text-foreground"
+                        >
+                          {lot.lot_number}
+                        </Link>
                       </td>
                       <td className="py-2 pr-4">
                         <span>{item?.name}</span>
@@ -85,6 +95,25 @@ async function LotsTable() {
                       </td>
                       <td className="py-2 pr-4">
                         <StatusBadge status={lot.status} />
+                      </td>
+                      <td className="py-2 pr-4">
+                        {coa ? (
+                          <Link
+                            href={`/dashboard/documents/${coa.id}/view`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-teal-700 hover:underline font-medium"
+                          >
+                            View CoA
+                          </Link>
+                        ) : (
+                          <Link
+                            href={`/dashboard/lots/${lot.id}`}
+                            className="text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            No CoA
+                          </Link>
+                        )}
                       </td>
                       <td className="py-2 text-right text-muted-foreground whitespace-nowrap">
                         {new Date(lot.received_at).toLocaleDateString()}
