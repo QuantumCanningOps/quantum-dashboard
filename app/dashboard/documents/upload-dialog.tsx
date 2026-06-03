@@ -18,17 +18,43 @@ const DOCUMENT_TYPES = [
   { value: "other", label: "Other" },
 ];
 
-interface Client {
+export interface Client {
   id: string;
   name: string;
   code: string;
 }
 
-interface Sku {
+export interface Lot {
   id: string;
-  code: string;
+  lot_number: string;
+  items: { name: string } | { name: string }[] | null;
+}
+
+export interface Formula {
+  id: string;
+  version: string;
+  skus: { code: string; name: string } | { code: string; name: string }[] | null;
+}
+
+export interface ThirdPartyLogistics {
+  id: string;
   name: string;
-  client_id: string;
+  code: string;
+}
+
+function lotItemName(items: Lot["items"]): string | null {
+  if (!items) return null;
+  if (Array.isArray(items)) return items[0]?.name ?? null;
+  return items.name;
+}
+
+function formulaSkuProp(
+  skus: Formula["skus"],
+  key: "code" | "name"
+): string | null {
+  if (!skus) return null;
+  if (Array.isArray(skus)) return skus[0]?.[key] ?? null;
+  return skus[key];
 }
 
 const selectClass =
@@ -36,25 +62,33 @@ const selectClass =
 
 export function UploadDialog({
   clients,
-  skus,
+  lots,
+  formulas,
+  thirdPartyLogistics,
 }: {
   clients: Client[];
-  skus: Sku[];
+  lots: Lot[];
+  formulas: Formula[];
+  thirdPartyLogistics: ThirdPartyLogistics[];
 }) {
   const [open, setOpen] = useState(false);
   const [clientId, setClientId] = useState("");
-  const [skuId, setSkuId] = useState("");
   const [docType, setDocType] = useState("");
+  const [lotId, setLotId] = useState("");
+  const [formulaId, setFormulaId] = useState("");
+  const [tplId, setTplId] = useState("");
+  const [selectedLotIds, setSelectedLotIds] = useState<Set<string>>(new Set());
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const filteredSkus = skus.filter((s) => s.client_id === clientId);
-
   function reset() {
     setClientId("");
-    setSkuId("");
     setDocType("");
+    setLotId("");
+    setFormulaId("");
+    setTplId("");
+    setSelectedLotIds(new Set());
     setFile(null);
     setError(null);
   }
@@ -64,8 +98,28 @@ export function UploadDialog({
     reset();
   }
 
+  function toggleLot(id: string) {
+    setSelectedLotIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  const isValid =
+    !!file &&
+    !!clientId &&
+    !!docType &&
+    (docType !== "coa" || !!lotId) &&
+    (docType !== "pa_letter" || !!formulaId) &&
+    (docType !== "bol" || (!!tplId && selectedLotIds.size > 0));
+
   async function handleUpload() {
-    if (!file || !clientId || !docType) return;
+    if (!isValid || !file) return;
     setUploading(true);
     setError(null);
 
@@ -82,10 +136,13 @@ export function UploadDialog({
 
       await createDocumentRecord({
         clientId,
-        skuId: skuId || undefined,
         documentType: docType,
         fileName: file.name,
         storagePath: path,
+        lotId: docType === "coa" ? lotId : undefined,
+        formulaId: docType === "pa_letter" ? formulaId : undefined,
+        thirdPartyLogisticsId: docType === "bol" ? tplId : undefined,
+        lotIds: docType === "bol" ? Array.from(selectedLotIds) : undefined,
       });
 
       close();
@@ -102,7 +159,7 @@ export function UploadDialog({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-background rounded-lg p-6 w-full max-w-md shadow-lg flex flex-col gap-5">
+      <div className="bg-background rounded-lg p-6 w-full max-w-md shadow-lg flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
         <h2 className="text-lg font-semibold">Upload Document</h2>
 
         <div className="flex flex-col gap-2">
@@ -111,10 +168,7 @@ export function UploadDialog({
             id="doc-client"
             className={selectClass}
             value={clientId}
-            onChange={(e) => {
-              setClientId(e.target.value);
-              setSkuId("");
-            }}
+            onChange={(e) => setClientId(e.target.value)}
           >
             <option value="">Select client…</option>
             {clients.map((c) => (
@@ -131,7 +185,13 @@ export function UploadDialog({
             id="doc-type"
             className={selectClass}
             value={docType}
-            onChange={(e) => setDocType(e.target.value)}
+            onChange={(e) => {
+              setDocType(e.target.value);
+              setLotId("");
+              setFormulaId("");
+              setTplId("");
+              setSelectedLotIds(new Set());
+            }}
           >
             <option value="">Select type…</option>
             {DOCUMENT_TYPES.map((t) => (
@@ -142,23 +202,92 @@ export function UploadDialog({
           </select>
         </div>
 
-        {filteredSkus.length > 0 && (
+        {docType === "coa" && (
           <div className="flex flex-col gap-2">
-            <Label htmlFor="doc-sku">SKU (optional)</Label>
+            <Label htmlFor="doc-lot">Lot *</Label>
             <select
-              id="doc-sku"
+              id="doc-lot"
               className={selectClass}
-              value={skuId}
-              onChange={(e) => setSkuId(e.target.value)}
+              value={lotId}
+              onChange={(e) => setLotId(e.target.value)}
             >
-              <option value="">None</option>
-              {filteredSkus.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.code} — {s.name}
+              <option value="">Select lot…</option>
+              {lots.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.lot_number}{lotItemName(l.items) ? ` — ${lotItemName(l.items)}` : ""}
                 </option>
               ))}
             </select>
           </div>
+        )}
+
+        {docType === "pa_letter" && (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="doc-formula">Formula *</Label>
+            <select
+              id="doc-formula"
+              className={selectClass}
+              value={formulaId}
+              onChange={(e) => setFormulaId(e.target.value)}
+            >
+              <option value="">Select formula…</option>
+              {formulas.map((f) => {
+                const skuCode = formulaSkuProp(f.skus, "code");
+                const skuName = formulaSkuProp(f.skus, "name");
+                return (
+                  <option key={f.id} value={f.id}>
+                    {skuCode ?? "—"} v{f.version}
+                    {skuName ? ` — ${skuName}` : ""}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+        )}
+
+        {docType === "bol" && (
+          <>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="doc-tpl">3PL *</Label>
+              <select
+                id="doc-tpl"
+                className={selectClass}
+                value={tplId}
+                onChange={(e) => setTplId(e.target.value)}
+              >
+                <option value="">Select 3PL…</option>
+                {thirdPartyLogistics.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.code} — {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label>Lots * <span className="text-muted-foreground font-normal">(select all that apply)</span></Label>
+              <div className="border rounded-md p-3 flex flex-col gap-2 max-h-40 overflow-y-auto">
+                {lots.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No lots available.</p>
+                ) : (
+                  lots.map((l) => (
+                    <label key={l.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedLotIds.has(l.id)}
+                        onChange={() => toggleLot(l.id)}
+                        className="h-4 w-4 rounded border-input"
+                      />
+                      <span>{l.lot_number}{lotItemName(l.items) ? ` — ${lotItemName(l.items)}` : ""}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+              {selectedLotIds.size > 0 && (
+                <p className="text-xs text-muted-foreground">{selectedLotIds.size} lot{selectedLotIds.size !== 1 ? "s" : ""} selected</p>
+              )}
+            </div>
+          </>
         )}
 
         <div className="flex flex-col gap-2">
@@ -166,6 +295,7 @@ export function UploadDialog({
           <Input
             id="doc-file"
             type="file"
+            accept=".pdf,image/png"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
         </div>
@@ -178,10 +308,7 @@ export function UploadDialog({
           <Button variant="outline" onClick={close} disabled={uploading}>
             Cancel
           </Button>
-          <Button
-            onClick={handleUpload}
-            disabled={uploading || !file || !clientId || !docType}
-          >
+          <Button onClick={handleUpload} disabled={uploading || !isValid}>
             {uploading ? "Uploading…" : "Upload"}
           </Button>
         </div>

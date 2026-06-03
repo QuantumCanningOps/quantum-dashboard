@@ -37,7 +37,7 @@ async function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="border-b h-14 flex items-center px-6 gap-6 shrink-0">
-        <span className="font-semibold text-sm">BrewhouseOps</span>
+        <span className="font-semibold text-sm">QuantumCanning</span>
         <nav className="flex gap-4 text-sm">
           {navLinks.map((link) => (
             <Link
@@ -63,7 +63,7 @@ function DashboardLayoutFallback() {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="border-b h-14 flex items-center px-6 gap-6 shrink-0">
-        <span className="font-semibold text-sm">BrewhouseOps</span>
+        <span className="font-semibold text-sm">QuantumCanning</span>
         <nav className="flex gap-4 text-sm">
           {navLinks.map((link) => (
             <span key={link.href} className="text-muted-foreground">
