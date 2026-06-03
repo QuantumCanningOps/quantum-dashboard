@@ -56,7 +56,7 @@ async function DocumentsContent() {
       supabase
         .from("documents")
         .select(
-          `id, document_type, file_name, uploaded_at,
+          `id, document_type, file_name, uploaded_at, carrier_name,
            clients(name, code),
            lots!lot_id(lot_number, items(name)),
            formulas!formula_id(version, skus(code, name)),
@@ -122,7 +122,14 @@ async function DocumentsContent() {
                     const tpl = doc.third_party_logistics as unknown as { name: string; code: string } | null;
                     const bolLots = (doc.document_lots as unknown as { lots: { lot_number: string; items: { name: string } | null } }[]) ?? [];
 
-                    const related = buildRelatedLabel(doc.document_type, lot, formula, tpl, bolLots);
+                    const related = buildRelatedLabel(
+                      doc.document_type,
+                      lot,
+                      formula,
+                      tpl,
+                      bolLots,
+                      (doc as unknown as { carrier_name: string | null }).carrier_name
+                    );
 
                     return (
                       <tr
@@ -187,7 +194,8 @@ function buildRelatedLabel(
   lot: { lot_number: string; items: { name: string } | null } | null,
   formula: { version: string; skus: { code: string; name: string } | null } | null,
   tpl: { name: string; code: string } | null,
-  bolLots: { lots: { lot_number: string; items: { name: string } | null } }[]
+  bolLots: { lots: { lot_number: string; items: { name: string } | null } }[],
+  carrierName?: string | null,
 ): string | null {
   if (docType === "coa" && lot) {
     return `Lot ${lot.lot_number}${lot.items ? ` · ${lot.items.name}` : ""}`;
@@ -197,6 +205,7 @@ function buildRelatedLabel(
   }
   if (docType === "bol") {
     const parts: string[] = [];
+    if (carrierName) parts.push(carrierName);
     if (tpl) parts.push(tpl.code);
     if (bolLots.length > 0) {
       parts.push(bolLots.map((bl) => bl.lots.lot_number).join(", "));

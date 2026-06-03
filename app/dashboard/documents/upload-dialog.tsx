@@ -77,6 +77,7 @@ export function UploadDialog({
   const [lotId, setLotId] = useState("");
   const [formulaId, setFormulaId] = useState("");
   const [tplId, setTplId] = useState("");
+  const [carrierName, setCarrierName] = useState("");
   const [selectedLotIds, setSelectedLotIds] = useState<Set<string>>(new Set());
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -88,6 +89,7 @@ export function UploadDialog({
     setLotId("");
     setFormulaId("");
     setTplId("");
+    setCarrierName("");
     setSelectedLotIds(new Set());
     setFile(null);
     setError(null);
@@ -116,7 +118,7 @@ export function UploadDialog({
     !!docType &&
     (docType !== "coa" || !!lotId) &&
     (docType !== "pa_letter" || !!formulaId) &&
-    (docType !== "bol" || (!!tplId && selectedLotIds.size > 0));
+    (docType !== "bol" || (!!carrierName.trim() && selectedLotIds.size > 0));
 
   async function handleUpload() {
     if (!isValid || !file) return;
@@ -141,7 +143,8 @@ export function UploadDialog({
         storagePath: path,
         lotId: docType === "coa" ? lotId : undefined,
         formulaId: docType === "pa_letter" ? formulaId : undefined,
-        thirdPartyLogisticsId: docType === "bol" ? tplId : undefined,
+        thirdPartyLogisticsId: docType === "bol" && tplId ? tplId : undefined,
+        carrierName: docType === "bol" && carrierName.trim() ? carrierName.trim() : undefined,
         lotIds: docType === "bol" ? Array.from(selectedLotIds) : undefined,
       });
 
@@ -190,6 +193,7 @@ export function UploadDialog({
               setLotId("");
               setFormulaId("");
               setTplId("");
+              setCarrierName("");
               setSelectedLotIds(new Set());
             }}
           >
@@ -248,14 +252,29 @@ export function UploadDialog({
         {docType === "bol" && (
           <>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="doc-tpl">3PL *</Label>
+              <Label htmlFor="doc-carrier">Carrier *</Label>
+              <Input
+                id="doc-carrier"
+                placeholder="e.g. FedEx Freight, UPS, XPO Logistics"
+                value={carrierName}
+                onChange={(e) => setCarrierName(e.target.value)}
+              />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="doc-tpl">
+                3PL{" "}
+                <span className="text-muted-foreground font-normal">
+                  (if delivered to offsite warehouse)
+                </span>
+              </Label>
               <select
                 id="doc-tpl"
                 className={selectClass}
                 value={tplId}
                 onChange={(e) => setTplId(e.target.value)}
               >
-                <option value="">Select 3PL…</option>
+                <option value="">None</option>
                 {thirdPartyLogistics.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.code} — {t.name}
