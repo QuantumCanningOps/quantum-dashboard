@@ -11,6 +11,7 @@ export async function createDocumentRecord(data: {
   lotId?: string;
   formulaId?: string;
   thirdPartyLogisticsId?: string;
+  carrierName?: string;
   lotIds?: string[];
 }) {
   const supabase = await createClient();
@@ -31,6 +32,7 @@ export async function createDocumentRecord(data: {
       lot_id: data.lotId ?? null,
       formula_id: data.formulaId ?? null,
       third_party_logistics_id: data.thirdPartyLogisticsId ?? null,
+      carrier_name: data.carrierName ?? null,
     })
     .select("id")
     .single();

@@ -39,7 +39,7 @@ async function LotDetailContent({
 
   const isInternal = !userRecord?.contact_id;
 
-  const [{ data: lot }, { data: history }] = await Promise.all([
+  const [{ data: lot }, { data: history }, { data: bolLinks }] = await Promise.all([
     supabase
       .from("lots")
       .select(
@@ -59,6 +59,10 @@ async function LotDetailContent({
       .eq("lot_id", id)
       .order("changed_at", { ascending: false })
       .limit(10),
+    supabase
+      .from("document_lots")
+      .select("documents(id, file_name, carrier_name, uploaded_at, document_type)")
+      .eq("lot_id", id),
   ]);
 
   if (!lot) notFound();
@@ -88,6 +92,15 @@ async function LotDetailContent({
     uploaded_at: string;
   }[]) ?? [];
   const coa = docs.find((d) => d.document_type === "coa");
+
+  type BolDocType = { id: string; file_name: string; carrier_name: string | null; uploaded_at: string };
+  const bolDoc: BolDocType | null = (() => {
+    for (const link of bolLinks ?? []) {
+      const doc = link.documents as unknown as BolDocType & { document_type: string } | null;
+      if (doc?.document_type === "bol") return doc;
+    }
+    return null;
+  })();
 
   return (
     <div className="flex flex-col gap-6">
@@ -256,6 +269,60 @@ async function LotDetailContent({
                     </p>
                   )}
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className={bolDoc ? "" : "border-amber-200 bg-amber-50"}>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                Bill of Lading
+                {bolDoc ? (
+                  <Badge className="bg-green-100 text-green-800 border-green-200">
+                    On File
+                  </Badge>
+                ) : (
+                  <Badge className="bg-amber-100 text-amber-800 border-amber-200">
+                    Missing
+                  </Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {bolDoc ? (
+                <div className="flex flex-col gap-3">
+                  <div className="text-sm">
+                    <p className="font-medium">{bolDoc.file_name}</p>
+                    {bolDoc.carrier_name && (
+                      <p className="text-muted-foreground text-xs mt-0.5">
+                        Carrier: {bolDoc.carrier_name}
+                      </p>
+                    )}
+                    <p className="text-muted-foreground text-xs mt-0.5">
+                      Uploaded {new Date(bolDoc.uploaded_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button asChild variant="outline" size="sm">
+                      <Link
+                        href={`/dashboard/documents/${bolDoc.id}/view`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        View BOL
+                      </Link>
+                    </Button>
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/dashboard/documents/${bolDoc.id}/download`}>
+                        Download
+                      </Link>
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-amber-800">
+                  No Bill of Lading is on file for this lot.
+                </p>
               )}
             </CardContent>
           </Card>
