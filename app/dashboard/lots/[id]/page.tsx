@@ -44,11 +44,11 @@ async function LotDetailContent({
       .from("lots")
       .select(
         `id, lot_number, status, received_at, expiration_date, manufacture_date,
-         po_number, production_order_id, notes,
+         po_number, batch_id, notes,
          items(name, item_type, unit_of_measure),
          clients(id, name, code),
          suppliers(name, code),
-         production_orders(id, order_number),
+         batches(id, production_orders(id, order_number)),
          documents!lot_id(id, document_type, file_name, uploaded_at)`
       )
       .eq("id", id)
@@ -81,10 +81,11 @@ async function LotDetailContent({
     name: string;
     code: string;
   } | null;
-  const productionOrder = lot.production_orders as unknown as {
+  const lotBatch = lot.batches as unknown as {
     id: string;
-    order_number: string;
+    production_orders: { id: string; order_number: string } | null;
   } | null;
+  const productionOrder = lotBatch?.production_orders ?? null;
   const docs = (lot.documents as unknown as {
     id: string;
     document_type: string;

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ProductionCalendar } from "./ProductionCalendar";
-import { ProductionOrdersTable, type ProductionOrderRow } from "./ProductionOrdersTable";
+import { ProductionOrdersTable, type BatchScheduleRow } from "./ProductionOrdersTable";
 import { ProductionFilters } from "./ProductionFilters";
 
 type Client = { id: string; name: string };
@@ -16,13 +16,13 @@ function mondayOf(date: Date): Date {
 }
 
 export function ProductionView({
-  orders,
+  batches,
   clients,
   clientId,
   status,
   q,
 }: {
-  orders: ProductionOrderRow[];
+  batches: BatchScheduleRow[];
   clients: Client[];
   clientId: string;
   status: string;
@@ -34,7 +34,7 @@ export function ProductionView({
   return (
     <>
       <ProductionCalendar
-        orders={orders}
+        batches={batches}
         windowStart={windowStart}
         onWindowChange={setWindowStart}
         hoveredId={hoveredId}
@@ -42,12 +42,12 @@ export function ProductionView({
       />
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Orders</CardTitle>
+          <CardTitle className="text-base">Batches</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <ProductionFilters clientId={clientId} status={status} q={q} clients={clients} />
           <ProductionOrdersTable
-            orders={orders}
+            batches={batches}
             hoveredId={hoveredId}
             onHoverChange={setHoveredId}
           />

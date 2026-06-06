@@ -9,6 +9,18 @@ type DetailPageProps = {
   params: Promise<{ id: string }>;
 };
 
+type BatchDetail = {
+  id: string;
+  batch_number: string | null;
+  status: string;
+  batching_date: string | null;
+  canning_date: string | null;
+  planned_quantity: number;
+  actual_quantity: number | null;
+  unit_of_measure: string;
+  tanks: { name: string } | null;
+};
+
 type OrderLine = {
   id: string;
   item_id: string;
@@ -32,7 +44,7 @@ type ItemSummary = {
 
 type LotPick = {
   id: string;
-  production_order_line_id: string;
+  batch_line_id: string;
   quantity: number;
   unit_of_measure: string;
   lots: {
@@ -55,28 +67,41 @@ async function ProductionDetail({ params }: DetailPageProps) {
   const { id } = await params;
   const supabase = await createClient();
 
-  const [{ data: order }, { data: lines }] = await Promise.all([
+  const [{ data: order }, { data: batchRows }] = await Promise.all([
     supabase
       .from("production_orders")
-      .select("*, clients(name, code), skus(code, name), tanks(name)")
+      .select("*, clients(name, code), skus(code, name)")
       .eq("id", id)
       .single(),
     supabase
-      .from("production_order_lines")
+      .from("batches")
       .select(
-        "id, item_id, planned_quantity, actual_quantity, unit_of_measure, items(name, item_type, unit_of_measure)",
+        "id, batch_number, status, batching_date, canning_date, planned_quantity, actual_quantity, unit_of_measure, tanks(name)",
       )
-      .eq("production_order_id", id),
+      .eq("production_order_id", id)
+      .order("created_at", { ascending: false }),
   ]);
 
   if (!order) notFound();
 
-  const orderLines = (lines ?? []) as unknown as OrderLine[];
-  const itemIds = orderLines.map((l) => l.item_id);
-  const lineIds = orderLines.map((l) => l.id);
   const client = order.clients as unknown as { name: string; code: string } | null;
   const sku = order.skus as unknown as { name: string; code: string } | null;
-  const tank = order.tanks as unknown as { name: string } | null;
+  const batches = (batchRows ?? []) as unknown as BatchDetail[];
+  const batch = batches.find((b) => b.status !== "cancelled") ?? batches[0] ?? null;
+  const tank = batch?.tanks ?? null;
+
+  const { data: lineRows } = batch
+    ? await supabase
+        .from("batch_lines")
+        .select(
+          "id, item_id, planned_quantity, actual_quantity, unit_of_measure, items(name, item_type, unit_of_measure)",
+        )
+        .eq("batch_id", batch.id)
+    : { data: [] };
+
+  const orderLines = (lineRows ?? []) as unknown as OrderLine[];
+  const itemIds = orderLines.map((l) => l.item_id);
+  const lineIds = orderLines.map((l) => l.id);
 
   const [{ data: summaryRows }, { data: lotPickRows }] = await Promise.all([
     itemIds.length
@@ -90,11 +115,11 @@ async function ProductionDetail({ params }: DetailPageProps) {
       : Promise.resolve({ data: [] as unknown[] }),
     lineIds.length
       ? supabase
-          .from("production_order_lot_picks")
+          .from("batch_lot_picks")
           .select(
-            "id, production_order_line_id, quantity, unit_of_measure, lots(id, lot_number, expiration_date, status)",
+            "id, batch_line_id, quantity, unit_of_measure, lots(id, lot_number, expiration_date, status)",
           )
-          .in("production_order_line_id", lineIds)
+          .in("batch_line_id", lineIds)
       : Promise.resolve({ data: [] as unknown[] }),
   ]);
 
@@ -108,7 +133,7 @@ async function ProductionDetail({ params }: DetailPageProps) {
 
   const picksByLine = ((lotPickRows ?? []) as unknown as LotPick[]).reduce(
     (acc, pick) => {
-      (acc[pick.production_order_line_id] ??= []).push(pick);
+      (acc[pick.batch_line_id] ??= []).push(pick);
       return acc;
     },
     {} as Record<string, LotPick[]>,
@@ -128,16 +153,16 @@ async function ProductionDetail({ params }: DetailPageProps) {
   });
 
   const isActive =
-    order.status === "scheduled" || order.status === "in_progress";
+    batch?.status === "scheduled" || batch?.status === "in_progress";
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
         <Link
-          href="/dashboard/production"
+          href="/dashboard/production-orders"
           className="text-sm text-muted-foreground hover:text-foreground hover:underline"
         >
-          Back to production orders
+          ← Production orders
         </Link>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="font-mono text-2xl font-bold">{order.order_number}</h1>
@@ -153,18 +178,26 @@ async function ProductionDetail({ params }: DetailPageProps) {
             </>
           ) : null}
         </p>
+        {batch?.batch_number && (
+          <p className="font-mono text-xs text-muted-foreground">
+            Batch{" "}
+            <span className="font-medium text-foreground">
+              {batch.batch_number}
+            </span>
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Planned
+              Ordered
             </CardTitle>
           </CardHeader>
           <CardContent>
             <span className="text-2xl font-bold">
-              {Number(order.planned_quantity).toLocaleString()}
+              {Number(order.ordered_quantity).toLocaleString()}
             </span>
             <span className="ml-1.5 text-sm text-muted-foreground">
               {order.unit_of_measure}
@@ -178,13 +211,13 @@ async function ProductionDetail({ params }: DetailPageProps) {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {order.actual_quantity != null ? (
+            {batch?.actual_quantity != null ? (
               <>
                 <span className="text-2xl font-bold">
-                  {Number(order.actual_quantity).toLocaleString()}
+                  {Number(batch.actual_quantity).toLocaleString()}
                 </span>
                 <span className="ml-1.5 text-sm text-muted-foreground">
-                  {order.unit_of_measure}
+                  {batch.unit_of_measure}
                 </span>
               </>
             ) : (
@@ -212,8 +245,8 @@ async function ProductionDetail({ params }: DetailPageProps) {
           </CardHeader>
           <CardContent>
             <span className="text-2xl font-bold">
-              {order.batching_date
-                ? new Date(order.batching_date).toLocaleDateString(undefined, {
+              {batch?.batching_date
+                ? new Date(batch.batching_date).toLocaleDateString(undefined, {
                     month: "short",
                     day: "numeric",
                   })
@@ -229,8 +262,8 @@ async function ProductionDetail({ params }: DetailPageProps) {
           </CardHeader>
           <CardContent>
             <span className="text-2xl font-bold">
-              {order.canning_date
-                ? new Date(order.canning_date).toLocaleDateString(undefined, {
+              {batch?.canning_date
+                ? new Date(batch.canning_date).toLocaleDateString(undefined, {
                     month: "short",
                     day: "numeric",
                   })
@@ -240,10 +273,13 @@ async function ProductionDetail({ params }: DetailPageProps) {
         </Card>
       </div>
 
-      {order.notes && (
+      {(order.notes || batch?.notes) && (
         <Card>
-          <CardContent className="pt-4 text-sm text-muted-foreground">
-            {order.notes}
+          <CardContent className="flex flex-col gap-1 pt-4 text-sm text-muted-foreground">
+            {order.notes && <p>{order.notes}</p>}
+            {batch?.notes && order.notes !== batch.notes && (
+              <p>{batch.notes}</p>
+            )}
           </CardContent>
         </Card>
       )}
@@ -507,14 +543,14 @@ function DetailFallback() {
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    draft: "bg-gray-100 text-gray-600 border-gray-200",
+    pending: "bg-gray-100 text-gray-600 border-gray-200",
     scheduled: "bg-blue-50 text-blue-700 border-blue-200",
     in_progress: "bg-amber-50 text-amber-700 border-amber-200",
     complete: "bg-green-100 text-green-800 border-green-200",
     cancelled: "bg-red-50 text-red-600 border-red-200",
   };
   const labels: Record<string, string> = {
-    draft: "Draft",
+    pending: "Pending",
     scheduled: "Scheduled",
     in_progress: "In Progress",
     complete: "Complete",

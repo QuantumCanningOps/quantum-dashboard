@@ -4,20 +4,23 @@ import { useState, useCallback } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 
-export type CalendarOrder = {
+export type CalendarBatch = {
   id: string;
-  order_number: string;
   status: string;
   batching_date: string | null;
   canning_date: string | null;
-  skus: { name: string; code: string } | null;
-  clients: { name: string } | null;
+  production_orders: {
+    id: string;
+    order_number: string;
+    skus: { name: string; code: string } | null;
+    clients: { name: string } | null;
+  } | null;
 };
 
 export type CalendarTank = {
   id: string;
   name: string;
-  production_orders: CalendarOrder[];
+  batches: CalendarBatch[];
 };
 
 const DAYS = 21;
@@ -135,11 +138,11 @@ export function TankCalendar({ tanks }: { tanks: CalendarTank[] }) {
 
           {/* Tank rows */}
           {tanks.map((tank) => {
-            const visible = tank.production_orders.filter((o) => {
-              if (!o.batching_date) return false;
-              if (o.status === "cancelled" || o.status === "draft") return false;
-              const end = o.canning_date ?? o.batching_date;
-              return o.batching_date <= windowEndStr && end >= windowStartStr;
+            const visible = tank.batches.filter((b) => {
+              if (!b.batching_date) return false;
+              if (b.status === "cancelled" || b.status === "draft") return false;
+              const end = b.canning_date ?? b.batching_date;
+              return b.batching_date <= windowEndStr && end >= windowStartStr;
             });
 
             return (
@@ -161,12 +164,13 @@ export function TankCalendar({ tanks }: { tanks: CalendarTank[] }) {
                     })}
                   </div>
 
-                  {/* Order bars */}
-                  {visible.map((order) => {
-                    if (!order.batching_date) return null;
-                    const batchMs = parseLocal(order.batching_date).getTime();
+                  {/* Batch bars */}
+                  {visible.map((batch) => {
+                    if (!batch.batching_date) return null;
+                    const po = batch.production_orders;
+                    const batchMs = parseLocal(batch.batching_date).getTime();
                     const canningMs = parseLocal(
-                      order.canning_date ?? order.batching_date,
+                      batch.canning_date ?? batch.batching_date,
                     ).getTime();
                     const startMs = windowStart.getTime();
                     const spanMs = DAYS * 86400000;
@@ -182,13 +186,13 @@ export function TankCalendar({ tanks }: { tanks: CalendarTank[] }) {
 
                     if (startFrac >= 1 || endFrac <= 0) return null;
 
-                    const style = STATUS_STYLE[order.status] ?? STATUS_STYLE.draft;
+                    const style = STATUS_STYLE[batch.status] ?? STATUS_STYLE.draft;
 
                     return (
                       <Link
-                        key={order.id}
-                        href={`/dashboard/production/${order.id}`}
-                        title={`${order.order_number}${order.skus?.name ? ` · ${order.skus.name}` : ""}`}
+                        key={batch.id}
+                        href={`/dashboard/production/${po?.id ?? ""}`}
+                        title={`${po?.order_number ?? ""}${po?.skus?.name ? ` · ${po.skus.name}` : ""}`}
                         className={`absolute top-2 bottom-2 flex items-center overflow-hidden rounded px-2 text-xs font-medium transition-opacity hover:opacity-80 ${style}`}
                         style={{
                           left: `${startFrac * 100}%`,
@@ -196,10 +200,10 @@ export function TankCalendar({ tanks }: { tanks: CalendarTank[] }) {
                         }}
                       >
                         <span className="truncate">
-                          {order.order_number}
-                          {order.skus?.name && (
+                          {po?.order_number ?? "—"}
+                          {po?.skus?.name && (
                             <span className="ml-1 opacity-75">
-                              {order.skus.name}
+                              {po.skus.name}
                             </span>
                           )}
                         </span>

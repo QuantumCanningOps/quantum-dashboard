@@ -3,12 +3,12 @@
 import { useCallback } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import type { ProductionOrderRow } from "./ProductionOrdersTable";
+import type { BatchScheduleRow } from "./ProductionOrdersTable";
 
 const DAYS = 21;
 
 type DayEvent = {
-  order: ProductionOrderRow;
+  batch: BatchScheduleRow;
   type: "batch" | "can";
 };
 
@@ -43,13 +43,13 @@ function mondayOf(date: Date): Date {
 }
 
 export function ProductionCalendar({
-  orders,
+  batches,
   windowStart,
   onWindowChange,
   hoveredId,
   onHoverChange,
 }: {
-  orders: ProductionOrderRow[];
+  batches: BatchScheduleRow[];
   windowStart: Date;
   onWindowChange: (d: Date) => void;
   hoveredId: string | null;
@@ -65,15 +65,15 @@ export function ProductionCalendar({
   const next = useCallback(() => onWindowChange(shiftDays(windowStart, 7)), [windowStart, onWindowChange]);
   const goToday = useCallback(() => onWindowChange(mondayOf(new Date())), [onWindowChange]);
 
-  // Build event map — always add both batch and can, even on the same day
+  // Build event map — dates are top-level on the batch row
   const eventsByDay: Record<string, DayEvent[]> = {};
-  for (const order of orders) {
-    if (order.status === "cancelled" || order.status === "draft") continue;
-    if (order.batching_date) {
-      (eventsByDay[order.batching_date] ??= []).push({ order, type: "batch" });
+  for (const batch of batches) {
+    if (batch.status === "cancelled" || batch.status === "draft") continue;
+    if (batch.batching_date) {
+      (eventsByDay[batch.batching_date] ??= []).push({ batch, type: "batch" });
     }
-    if (order.canning_date) {
-      (eventsByDay[order.canning_date] ??= []).push({ order, type: "can" });
+    if (batch.canning_date) {
+      (eventsByDay[batch.canning_date] ??= []).push({ batch, type: "can" });
     }
   }
 
@@ -141,24 +141,25 @@ export function ProductionCalendar({
                   </div>
                   <div className="flex flex-col gap-0.5">
                     {events.map((event, ei) => {
-                      const isHighlighted = hoveredId === event.order.id;
+                      const isHighlighted = hoveredId === event.batch.id;
                       const isDimmed = hoveredId !== null && !isHighlighted;
+                      const po = event.batch.production_orders;
                       return (
                         <Link
-                          key={`${event.order.id}-${event.type}-${ei}`}
-                          href={`/dashboard/production/${event.order.id}`}
-                          title={`${event.type === "batch" ? "Batch" : "Can"}: ${event.order.order_number}${event.order.skus?.name ? ` · ${event.order.skus.name}` : ""}`}
+                          key={`${event.batch.id}-${event.type}-${ei}`}
+                          href={po?.id ? `/dashboard/production/${po.id}` : "#"}
+                          title={`${event.type === "batch" ? "Batch" : "Can"}: ${event.batch.batch_number ?? po?.order_number ?? ""}${po?.skus?.name ? ` · ${po.skus.name}` : ""}`}
                           className={`flex items-center gap-1 rounded border px-1 py-0.5 text-[10px] leading-tight transition-all ${TYPE_STYLE[event.type]} ${
                             isHighlighted ? `ring-2 ${TYPE_RING[event.type]}` : ""
                           } ${isDimmed ? "opacity-30" : ""}`}
-                          onMouseEnter={() => onHoverChange(event.order.id)}
+                          onMouseEnter={() => onHoverChange(event.batch.id)}
                           onMouseLeave={() => onHoverChange(null)}
                         >
                           <span className="shrink-0 font-semibold">
                             {event.type === "batch" ? "Batch" : "Can"}
                           </span>
                           <span className="truncate">
-                            {event.order.skus?.name ?? event.order.order_number}
+                            {po?.skus?.name ?? event.batch.batch_number ?? po?.order_number}
                           </span>
                         </Link>
                       );
