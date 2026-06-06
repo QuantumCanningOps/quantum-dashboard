@@ -46,9 +46,8 @@ type ArtworkRow = {
 type DraftOrderRow = {
   id: string;
   order_number: string;
-  planned_quantity: number | null;
+  ordered_quantity: number | null;
   created_at: string;
-  scheduled_date: string | null;
   clients: { name: string; code: string } | null;
   skus: { code: string; name: string } | null;
 };
@@ -107,9 +106,9 @@ async function NeedsAttentionContent() {
     supabase
       .from("production_orders")
       .select(
-        "id, order_number, planned_quantity, created_at, scheduled_date, clients(name, code), skus(code, name)"
+        "id, order_number, ordered_quantity, created_at, clients(name, code), skus(code, name)"
       )
-      .eq("status", "draft")
+      .eq("status", "pending")
       .order("created_at", { ascending: false }),
 
     supabase
@@ -123,7 +122,7 @@ async function NeedsAttentionContent() {
 
   const activeLots = (rawActiveLots ?? []) as unknown as LotRow[];
   const unapprovedArtwork = (rawUnapprovedArtwork ?? []) as unknown as ArtworkRow[];
-  const draftOrders = (rawDraftOrders ?? []) as unknown as DraftOrderRow[];
+  const pendingOrders = (rawDraftOrders ?? []) as unknown as DraftOrderRow[];
   const allFormulas = (rawFormulas ?? []) as unknown as FormulaRow[];
 
   const lotIdsWithCoa = new Set(
@@ -175,7 +174,7 @@ async function NeedsAttentionContent() {
     missingCoaLots.length +
     missingPaFormulas.length +
     unapprovedArtwork.length +
-    draftOrders.length +
+    pendingOrders.length +
     expiredLots.length +
     expiringSoonLots.length;
 
@@ -212,8 +211,8 @@ async function NeedsAttentionContent() {
         />
         <StatCard
           label="Draft Orders"
-          count={draftOrders.length}
-          urgent={draftOrders.length > 0}
+          count={pendingOrders.length}
+          urgent={pendingOrders.length > 0}
         />
         <StatCard
           label="Expiry Issues"
@@ -264,10 +263,10 @@ async function NeedsAttentionContent() {
 
       <Section
         title="Unscheduled Production Orders"
-        count={draftOrders.length}
-        emptyText="No draft production orders."
+        count={pendingOrders.length}
+        emptyText="No pending production orders."
       >
-        <DraftOrderTable orders={draftOrders} />
+        <DraftOrderTable orders={pendingOrders} />
       </Section>
 
       <Section
@@ -555,7 +554,7 @@ function DraftOrderTable({ orders }: { orders: DraftOrderRow[] }) {
             <th className="pb-2 text-left font-medium">Order #</th>
             <th className="pb-2 text-left font-medium">SKU</th>
             <th className="pb-2 text-left font-medium">Client</th>
-            <th className="pb-2 text-left font-medium">Planned Qty</th>
+            <th className="pb-2 text-left font-medium">Ordered Qty</th>
             <th className="pb-2 text-right font-medium">Created</th>
           </tr>
         </thead>
@@ -567,7 +566,7 @@ function DraftOrderTable({ orders }: { orders: DraftOrderRow[] }) {
             >
               <td className="py-2 pr-4 font-mono text-xs">
                 <Link
-                  href={`/dashboard/production`}
+                  href={`/dashboard/production/${o.id}`}
                   className="hover:underline"
                 >
                   {o.order_number}
@@ -580,8 +579,8 @@ function DraftOrderTable({ orders }: { orders: DraftOrderRow[] }) {
                 {o.clients?.code ?? "—"}
               </td>
               <td className="py-2 pr-4 text-muted-foreground">
-                {o.planned_quantity != null
-                  ? o.planned_quantity.toLocaleString()
+                {o.ordered_quantity != null
+                  ? o.ordered_quantity.toLocaleString()
                   : "—"}
               </td>
               <td className="py-2 text-right text-muted-foreground whitespace-nowrap">

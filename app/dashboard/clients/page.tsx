@@ -15,7 +15,7 @@ export default function ClientsPage() {
 async function ClientsList() {
   const supabase = await createClient();
 
-  const [{ data: clients }, { data: skus }, { data: contacts }, { data: lots }] =
+  const [{ data: clients }, { data: skus }, { data: contacts }, { data: lots }, { data: openOrders }] =
     await Promise.all([
       supabase.from("clients").select("id, name, code, active"),
       supabase
@@ -28,6 +28,11 @@ async function ClientsList() {
       supabase
         .from("lots")
         .select("id, client_id, status"),
+      supabase
+        .from("production_orders")
+        .select("id, order_number, sku_id, client_id, ordered_quantity, unit_of_measure, status")
+        .in("status", ["pending", "scheduled", "in_progress"])
+        .order("created_at", { ascending: false }),
     ]);
 
   return (
@@ -44,6 +49,16 @@ async function ClientsList() {
           );
           const clientLots = (lots ?? []).filter(
             (l) => l.client_id === client.id
+          );
+          const clientOrders = (openOrders ?? []).filter(
+            (o) => o.client_id === client.id
+          );
+          const ordersBySku = clientOrders.reduce(
+            (acc, o) => {
+              if (o.sku_id) (acc[o.sku_id] ??= []).push(o);
+              return acc;
+            },
+            {} as Record<string, typeof clientOrders>
           );
           const lotsByStatus = clientLots.reduce(
             (acc, l) => {
@@ -102,31 +117,52 @@ async function ClientsList() {
                         version: number;
                         status: string;
                       } | null;
+                      const skuOrders = ordersBySku[sku.id] ?? [];
                       return (
-                        <li key={sku.id} className="flex items-center gap-2">
-                          <Link
-                            href={
-                              sku.formula_id
-                                ? `/dashboard/formulas/${sku.formula_id}`
-                                : "/dashboard/clients"
-                            }
-                            className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-0.5 hover:bg-muted"
-                            aria-disabled={!sku.formula_id}
-                          >
-                            <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
-                              {sku.code}
-                            </span>
-                            <span className="truncate text-sm hover:underline">
-                              {sku.name}
-                            </span>
-                          </Link>
-                          {formula && (
-                            <span className="text-xs text-muted-foreground ml-auto">
-                              Formula v{formula.version}
-                              {formula.status === "authorized" && (
-                                <span className="ml-1 text-green-600">✓</span>
-                              )}
-                            </span>
+                        <li key={sku.id} className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            <Link
+                              href={
+                                sku.formula_id
+                                  ? `/dashboard/formulas/${sku.formula_id}`
+                                  : "/dashboard/clients"
+                              }
+                              className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-0.5 hover:bg-muted"
+                              aria-disabled={!sku.formula_id}
+                            >
+                              <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
+                                {sku.code}
+                              </span>
+                              <span className="truncate text-sm hover:underline">
+                                {sku.name}
+                              </span>
+                            </Link>
+                            {formula && (
+                              <span className="text-xs text-muted-foreground ml-auto">
+                                Formula v{formula.version}
+                                {formula.status === "authorized" && (
+                                  <span className="ml-1 text-green-600">✓</span>
+                                )}
+                              </span>
+                            )}
+                          </div>
+                          {skuOrders.length > 0 && (
+                            <ul className="ml-4 flex flex-col gap-0.5">
+                              {skuOrders.map((order) => (
+                                <li key={order.id} className="flex items-center gap-2">
+                                  <Link
+                                    href={`/dashboard/production/${order.id}`}
+                                    className="font-mono text-xs text-muted-foreground hover:underline"
+                                  >
+                                    {order.order_number}
+                                  </Link>
+                                  <span className="text-xs text-muted-foreground tabular-nums">
+                                    {Number(order.ordered_quantity).toLocaleString()} {order.unit_of_measure}
+                                  </span>
+                                  <OrderStatusBadge status={order.status} />
+                                </li>
+                              ))}
+                            </ul>
                           )}
                         </li>
                       );
@@ -186,6 +222,24 @@ function ClientsFallback() {
         ))}
       </div>
     </div>
+  );
+}
+
+function OrderStatusBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    pending: "bg-amber-50 text-amber-700 border-amber-200",
+    scheduled: "bg-blue-50 text-blue-700 border-blue-200",
+    in_progress: "bg-violet-50 text-violet-700 border-violet-200",
+  };
+  const labels: Record<string, string> = {
+    pending: "Pending",
+    scheduled: "Scheduled",
+    in_progress: "In Progress",
+  };
+  return (
+    <Badge className={`ml-auto text-[10px] px-1.5 py-0 ${map[status] ?? ""}`}>
+      {labels[status] ?? status}
+    </Badge>
   );
 }
 

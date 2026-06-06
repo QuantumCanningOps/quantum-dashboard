@@ -5,29 +5,32 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { TankCalendar, type CalendarTank } from "./TankCalendar";
 
-type TankOrder = {
+type TankBatch = {
   id: string;
-  order_number: string;
   status: string;
   batching_date: string | null;
   canning_date: string | null;
   planned_quantity: number;
   unit_of_measure: string;
-  clients: { name: string } | null;
-  skus: { name: string; code: string } | null;
+  production_orders: {
+    id: string;
+    order_number: string;
+    clients: { name: string } | null;
+    skus: { name: string; code: string } | null;
+  } | null;
 };
 
 type Tank = {
   id: string;
   name: string;
   capacity_gallons: number | null;
-  production_orders: TankOrder[];
+  batches: TankBatch[];
 };
 
 type EnrichedTank = Tank & {
-  inProgress: TankOrder[];
-  upcoming: TankOrder[];
-  recent: TankOrder[];
+  inProgress: TankBatch[];
+  upcoming: TankBatch[];
+  recent: TankBatch[];
 };
 
 export default function TanksPage() {
@@ -45,12 +48,11 @@ async function TanksSchedule() {
     .from("tanks")
     .select(
       `id, name, capacity_gallons,
-       production_orders(
-         id, order_number, status,
+       batches(
+         id, status,
          batching_date, canning_date,
          planned_quantity, unit_of_measure,
-         clients(name),
-         skus(name, code)
+         production_orders(id, order_number, clients(name), skus(name, code))
        )`,
     )
     .eq("active", true)
@@ -60,23 +62,23 @@ async function TanksSchedule() {
 
   const enriched: EnrichedTank[] = ((tanks ?? []) as unknown as Tank[]).map(
     (tank) => {
-      const orders = tank.production_orders.filter(
-        (o) => o.status !== "cancelled" && o.status !== "draft",
+      const batches = tank.batches.filter(
+        (b) => b.status !== "cancelled" && b.status !== "draft",
       );
 
-      const inProgress = orders.filter((o) => o.status === "in_progress");
+      const inProgress = batches.filter((b) => b.status === "in_progress");
 
-      const upcoming = orders
+      const upcoming = batches
         .filter(
-          (o) =>
-            o.status === "scheduled" &&
-            o.batching_date != null &&
-            o.batching_date >= todayStr,
+          (b) =>
+            b.status === "scheduled" &&
+            b.batching_date != null &&
+            b.batching_date >= todayStr,
         )
         .sort((a, b) => (a.batching_date ?? "").localeCompare(b.batching_date ?? ""));
 
-      const recent = orders
-        .filter((o) => o.status === "complete")
+      const recent = batches
+        .filter((b) => b.status === "complete")
         .sort((a, b) =>
           (b.batching_date ?? "").localeCompare(a.batching_date ?? ""),
         )
@@ -86,17 +88,15 @@ async function TanksSchedule() {
     },
   );
 
-  const calendarTanks: CalendarTank[] = (tanks ?? []).map((t: any) => ({
+  const calendarTanks: CalendarTank[] = ((tanks ?? []) as unknown as Tank[]).map((t) => ({
     id: t.id,
     name: t.name,
-    production_orders: (t.production_orders ?? []).map((o: any) => ({
-      id: o.id,
-      order_number: o.order_number,
-      status: o.status,
-      batching_date: o.batching_date,
-      canning_date: o.canning_date,
-      skus: o.skus ?? null,
-      clients: o.clients ?? null,
+    batches: t.batches.map((b) => ({
+      id: b.id,
+      status: b.status,
+      batching_date: b.batching_date,
+      canning_date: b.canning_date,
+      production_orders: b.production_orders ?? null,
     })),
   }));
 
@@ -138,14 +138,14 @@ function TankCard({ tank }: { tank: EnrichedTank }) {
       </CardHeader>
       <CardContent>
         {!hasAny ? (
-          <p className="text-sm text-muted-foreground">No scheduled orders.</p>
+          <p className="text-sm text-muted-foreground">No scheduled batches.</p>
         ) : (
           <div className="flex flex-col gap-3">
-            {tank.inProgress.map((order) => (
-              <OrderRow key={order.id} order={order} variant="active" />
+            {tank.inProgress.map((batch) => (
+              <BatchRow key={batch.id} batch={batch} variant="active" />
             ))}
-            {tank.upcoming.map((order) => (
-              <OrderRow key={order.id} order={order} variant="upcoming" />
+            {tank.upcoming.map((batch) => (
+              <BatchRow key={batch.id} batch={batch} variant="upcoming" />
             ))}
             {tank.recent.length > 0 && (
               <>
@@ -156,8 +156,8 @@ function TankCard({ tank }: { tank: EnrichedTank }) {
                     </p>
                   </div>
                 )}
-                {tank.recent.map((order) => (
-                  <OrderRow key={order.id} order={order} variant="recent" />
+                {tank.recent.map((batch) => (
+                  <BatchRow key={batch.id} batch={batch} variant="recent" />
                 ))}
               </>
             )}
@@ -168,18 +168,19 @@ function TankCard({ tank }: { tank: EnrichedTank }) {
   );
 }
 
-function OrderRow({
-  order,
+function BatchRow({
+  batch,
   variant,
 }: {
-  order: TankOrder;
+  batch: TankBatch;
   variant: "active" | "upcoming" | "recent";
 }) {
   const muted = variant === "recent";
+  const po = batch.production_orders;
 
   return (
     <Link
-      href={`/dashboard/production/${order.id}`}
+      href={`/dashboard/production/${po?.id ?? ""}`}
       className={`flex flex-col gap-0.5 rounded-md border p-2.5 transition-colors hover:bg-muted/50 ${
         variant === "active"
           ? "border-amber-200 bg-amber-50"
@@ -192,22 +193,22 @@ function OrderRow({
         <span
           className={`font-mono text-xs font-medium ${muted ? "text-muted-foreground" : ""}`}
         >
-          {order.order_number}
+          {po?.order_number ?? "—"}
         </span>
-        <StatusBadge status={order.status} />
+        <StatusBadge status={batch.status} />
       </div>
       <span className={`text-sm ${muted ? "text-muted-foreground" : "font-medium"}`}>
-        {order.skus?.name ?? "—"}
-        {order.clients && (
+        {po?.skus?.name ?? "—"}
+        {po?.clients && (
           <span className="ml-1.5 font-normal text-muted-foreground">
-            · {order.clients.name}
+            · {po.clients.name}
           </span>
         )}
       </span>
       <span className="text-xs text-muted-foreground">
-        {formatDateRange(order.batching_date, order.canning_date)}
+        {formatDateRange(batch.batching_date, batch.canning_date)}
         <span className="ml-2">
-          {Number(order.planned_quantity).toLocaleString()} {order.unit_of_measure}
+          {Number(batch.planned_quantity).toLocaleString()} {batch.unit_of_measure}
         </span>
       </span>
     </Link>
