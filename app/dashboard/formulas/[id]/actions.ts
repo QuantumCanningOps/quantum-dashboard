@@ -58,11 +58,23 @@ export async function updateFormulaSku(data: {
   }
 
   if (data.newSkuId) {
-    const { error } = await supabase
+    const { data: formulaRow, error: formulaError } = await supabase
+      .from("formulas")
+      .select("client_id")
+      .eq("id", data.formulaId)
+      .single();
+    if (formulaError) return { success: false, error: formulaError.message };
+
+    const { data: updatedRows, error } = await supabase
       .from("skus")
       .update({ formula_id: data.formulaId })
-      .eq("id", data.newSkuId);
+      .eq("id", data.newSkuId)
+      .eq("client_id", formulaRow.client_id)
+      .select("id");
     if (error) return { success: false, error: error.message };
+    if (!updatedRows || updatedRows.length === 0) {
+      return { success: false, error: "SKU does not belong to this client" };
+    }
   }
 
   revalidatePath(`/dashboard/formulas/${data.formulaId}`);
