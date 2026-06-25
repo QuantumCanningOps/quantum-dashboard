@@ -2,7 +2,6 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { createDocumentRecord } from "../../documents/actions";
 
 // ---------------------------------------------------------------------------
 // Inline client creation
@@ -117,69 +116,33 @@ export async function createFormula(data: {
   if (!user) return { success: false, error: "Not authenticated" };
 
   try {
-    const { data: formula, error: formulaError } = await supabase
-      .from("formulas")
-      .insert({
-        client_id: data.clientId,
-        version: 1,
-        formula_number: data.formulaNumber,
-        name: data.name,
-        base_quantity: data.baseQuantity,
-        base_unit_of_measure: data.baseUnitOfMeasure,
-        batching_instructions: data.batchingInstructions,
-        status: data.status,
-        created_by: user.id,
-      })
-      .select("id")
-      .single();
-
-    if (formulaError) throw new Error(formulaError.message);
-
-    const { error: linesError } = await supabase.from("formula_lines").insert(
-      data.lines.map((line) => ({
-        formula_id: formula.id,
-        item_id: line.itemId,
-        line_type: line.lineType,
-        quantity: line.quantity,
-        unit_of_measure: line.unitOfMeasure,
-        quantity_basis: line.quantityBasis,
-      }))
+    const { data: formulaId, error } = await supabase.rpc(
+      "create_formula_with_details",
+      {
+        p_client_id: data.clientId,
+        p_sku_id: data.skuId,
+        p_formula_number: data.formulaNumber,
+        p_name: data.name,
+        p_base_quantity: data.baseQuantity,
+        p_base_unit_of_measure: data.baseUnitOfMeasure,
+        p_batching_instructions: data.batchingInstructions,
+        p_status: data.status,
+        p_lines: data.lines,
+        p_pa_letter: data.paLetter,
+        p_artwork_files: data.artworkFiles,
+        p_created_by: user.id,
+      }
     );
-    if (linesError) throw new Error(linesError.message);
 
-    if (data.skuId) {
-      const { error: skuError } = await supabase
-        .from("skus")
-        .update({ formula_id: formula.id })
-        .eq("id", data.skuId);
-      if (skuError) throw new Error(skuError.message);
-    }
+    if (error) throw new Error(error.message);
+    if (!formulaId) throw new Error("Formula creation did not return an id");
 
-    if (data.paLetter) {
-      await createDocumentRecord({
-        clientId: data.clientId,
-        documentType: "pa_letter",
-        fileName: data.paLetter.fileName,
-        storagePath: data.paLetter.storagePath,
-        formulaId: formula.id,
-      });
-    }
-
-    for (const artwork of data.artworkFiles) {
-      await createDocumentRecord({
-        clientId: data.clientId,
-        documentType: "artwork",
-        fileName: artwork.fileName,
-        storagePath: artwork.storagePath,
-        formulaId: formula.id,
-      });
-    }
-
+    revalidatePath("/dashboard/documents");
     revalidatePath("/dashboard/clients");
     revalidatePath("/dashboard/needs-attention");
-    revalidatePath(`/dashboard/formulas/${formula.id}`);
+    revalidatePath(`/dashboard/formulas/${formulaId}`);
 
-    return { success: true, id: formula.id };
+    return { success: true, id: formulaId };
   } catch (e) {
     return {
       success: false,

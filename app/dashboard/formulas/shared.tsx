@@ -171,7 +171,7 @@ export function NewSkuForm({
 }
 
 // ---------------------------------------------------------------------------
-// NewIngredientForm — inline panel shown when "Create new ingredient" is
+// NewIngredientForm — inline panel shown when "Create new item" is
 // selected on a formula line. Reuses the createItem action shared with
 // ReceivingForm.tsx.
 // ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ export function NewIngredientForm({
   return (
     <div className="rounded-md border border-dashed border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-blue-800 dark:text-blue-200">New Ingredient</span>
+        <span className="text-xs font-semibold text-blue-800 dark:text-blue-200">New Item</span>
         <button
           type="button"
           onClick={onCancel}
@@ -262,7 +262,7 @@ export function NewIngredientForm({
       {error && <p className="text-xs text-destructive">{error}</p>}
 
       <Button size="sm" disabled={!isValid || saving} onClick={handleSave}>
-        {saving ? "Saving…" : "Save Ingredient"}
+        {saving ? "Saving…" : "Save Item"}
       </Button>
     </div>
   );
@@ -358,7 +358,7 @@ export function LineRow({
         )}
       </div>
 
-      {/* Row 1: line type + ingredient */}
+      {/* Row 1: line type + item */}
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-1.5">
           <Label className="text-xs">Line Type *</Label>
@@ -393,7 +393,7 @@ export function LineRow({
         </div>
       </div>
 
-      {/* New ingredient form — shown when "Create new ingredient" is selected */}
+      {/* New item form — shown when "Create new item" is selected */}
       {creatingItem && (
         <NewIngredientForm
           clientId={clientId}
