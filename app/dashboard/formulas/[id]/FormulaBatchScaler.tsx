@@ -5,9 +5,18 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Check, X } from "lucide-react";
+import { Check, Pencil, X } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import {
+  LineRow,
+  newLineDraft,
+  type ItemOption,
+  type LineDraft,
+  type LineType,
+} from "../shared";
+import { updateFormulaLines } from "./actions";
+import type { NewItemResult } from "../../receiving/actions";
 
 const FLUID_OUNCES_PER_GALLON = 128;
 const CAN_SIZE_OUNCES = 12;
@@ -22,6 +31,7 @@ export type FormulaLine = {
   line_type: string;
   quantity: number;
   unit_of_measure: string;
+  quantity_basis: "per_batch" | "per_can" | "percentage";
   items: {
     name: string;
     item_type: string;
@@ -38,20 +48,101 @@ type FormulaBatchScalerProps = {
   baseQuantity: number;
   baseUnitOfMeasure: string;
   clientId: string;
+  formulaId: string;
   lines: FormulaLine[];
+  items: ItemOption[];
   inventoryAvailability: InventoryAvailability;
 };
+
+function lineToDraft(line: FormulaLine): LineDraft {
+  return {
+    key: line.id,
+    lineType: line.line_type as LineType,
+    itemId: line.item_id,
+    quantity: String(line.quantity),
+    unitOfMeasure: line.unit_of_measure,
+    quantityBasis: line.quantity_basis,
+  };
+}
 
 export function FormulaBatchScaler({
   baseQuantity,
   baseUnitOfMeasure,
   clientId,
+  formulaId,
   lines,
+  items: initialItems,
   inventoryAvailability,
 }: FormulaBatchScalerProps) {
   const [batchAmount, setBatchAmount] = useState(baseQuantity);
   const [batchUnit, setBatchUnit] = useState<BatchUnit>("gallons");
   const [bufferPercent, setBufferPercent] = useState(0);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [lineDrafts, setLineDrafts] = useState<LineDraft[]>([]);
+  const [extraItems, setExtraItems] = useState<ItemOption[]>([]);
+  const allItems = [
+    ...initialItems,
+    ...extraItems.filter((i) => !initialItems.some((ii) => ii.id === i.id)),
+  ];
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  function startEditing() {
+    setLineDrafts(lines.length > 0 ? lines.map(lineToDraft) : [newLineDraft("ingredient")]);
+    setSaveError(null);
+    setIsEditing(true);
+  }
+
+  const updateLineDraft = useCallback((key: string, updates: Partial<LineDraft>) => {
+    setLineDrafts((prev) => prev.map((l) => (l.key === key ? { ...l, ...updates } : l)));
+  }, []);
+
+  const removeLineDraft = useCallback((key: string) => {
+    setLineDrafts((prev) => prev.filter((l) => l.key !== key));
+  }, []);
+
+  function addLineDraft(lineType: LineType = "ingredient") {
+    setLineDrafts((prev) => [...prev, newLineDraft(lineType)]);
+  }
+
+  function handleItemCreated(item: NewItemResult) {
+    setExtraItems((prev) => [...prev, item]);
+  }
+
+  const lineDraftErrors: Record<string, string[]> = {};
+  for (const line of lineDrafts) {
+    const errs: string[] = [];
+    if (!line.itemId) errs.push("ingredient");
+    if (!line.quantity || Number(line.quantity) <= 0) errs.push("quantity");
+    if (!line.unitOfMeasure.trim()) errs.push("unit");
+    if (errs.length > 0) lineDraftErrors[line.key] = errs;
+  }
+  const linesAreValid =
+    lineDrafts.length > 0 && Object.keys(lineDraftErrors).length === 0;
+
+  async function handleSaveLines() {
+    if (!linesAreValid) return;
+    setSaving(true);
+    setSaveError(null);
+    const result = await updateFormulaLines(
+      formulaId,
+      lineDrafts.map((l) => ({
+        itemId: l.itemId,
+        lineType: l.lineType,
+        quantity: Number(l.quantity),
+        unitOfMeasure: l.unitOfMeasure.trim(),
+        quantityBasis: l.quantityBasis,
+      }))
+    );
+    if (!result.success) {
+      setSaveError(result.error);
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
+    setIsEditing(false);
+  }
 
   const presetBatchSizes = useMemo(() => {
     return [0.25, 0.5, 1, 1.5, 2].map((multiplier) => {
@@ -83,7 +174,19 @@ export function FormulaBatchScaler({
     <Card>
       <CardHeader className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
-          <CardTitle className="text-base">Formula Lines</CardTitle>
+          <div className="flex items-center gap-2">
+            <CardTitle className="text-base">Formula Lines</CardTitle>
+            {!isEditing && (
+              <button
+                type="button"
+                onClick={startEditing}
+                aria-label="Edit formula lines"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <Pencil className="size-4" />
+              </button>
+            )}
+          </div>
           <p className="mt-1 text-sm text-muted-foreground">
             Base formula: {formatQuantity(baseQuantity)} {baseUnitOfMeasure}
           </p>
@@ -106,6 +209,7 @@ export function FormulaBatchScaler({
           )}
         </div>
 
+        {!isEditing && (
         <div className="flex w-full flex-col gap-2 md:w-auto md:min-w-80">
           <div className="grid gap-2 sm:grid-cols-[1fr_7rem]">
             <div className="flex flex-col gap-2">
@@ -180,8 +284,51 @@ export function FormulaBatchScaler({
             ))}
           </div>
         </div>
+        )}
       </CardHeader>
       <CardContent>
+        {isEditing ? (
+          <div className="flex flex-col gap-3">
+            {lineDrafts.map((line, i) => (
+              <LineRow
+                key={line.key}
+                line={line}
+                index={i}
+                items={allItems}
+                canRemove={lineDrafts.length > 1}
+                clientId={clientId}
+                onUpdate={updateLineDraft}
+                onRemove={removeLineDraft}
+                onItemCreated={handleItemCreated}
+              />
+            ))}
+
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => addLineDraft("ingredient")}>
+                + Add Ingredient Line
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => addLineDraft("packaging")}>
+                + Add Packaging Line
+              </Button>
+            </div>
+
+            {saveError && <p className="text-sm text-destructive">{saveError}</p>}
+
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsEditing(false)}
+                disabled={saving}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" onClick={handleSaveLines} disabled={saving || !linesAreValid}>
+                {saving ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          </div>
+        ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -234,25 +381,29 @@ export function FormulaBatchScaler({
                       </span>
                     </td>
                     <td className="py-2 text-center">
-                      <span
-                        title={`${formatInventoryAvailability(inventoryAvailability[line.item_id])} on hand`}
-                        aria-label={
-                          hasEnough
-                            ? "Inventory is sufficient"
-                            : "Inventory is insufficient"
-                        }
-                        className={
-                          hasEnough
-                            ? "inline-flex text-green-600"
-                            : "inline-flex text-red-600"
-                        }
-                      >
-                        {hasEnough ? (
-                          <Check className="size-4" />
-                        ) : (
-                          <X className="size-4" />
-                        )}
-                      </span>
+                      {line.quantity_basis === "percentage" ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <span
+                          title={`${formatInventoryAvailability(inventoryAvailability[line.item_id])} on hand`}
+                          aria-label={
+                            hasEnough
+                              ? "Inventory is sufficient"
+                              : "Inventory is insufficient"
+                          }
+                          className={
+                            hasEnough
+                              ? "inline-flex text-green-600"
+                              : "inline-flex text-red-600"
+                          }
+                        >
+                          {hasEnough ? (
+                            <Check className="size-4" />
+                          ) : (
+                            <X className="size-4" />
+                          )}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -260,6 +411,7 @@ export function FormulaBatchScaler({
             </tbody>
           </table>
         </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -318,7 +470,11 @@ function getRequiredQuantity(
   scale: number,
   filledCanCount: number | null,
 ) {
-  if (line.line_type !== "packaging" || filledCanCount === null) {
+  if (line.quantity_basis === "percentage") {
+    return Number(line.quantity);
+  }
+
+  if (line.quantity_basis !== "per_can" || filledCanCount === null) {
     return Number(line.quantity) * scale;
   }
 
@@ -330,7 +486,7 @@ function getRequiredQuantity(
 }
 
 function formatRequiredQuantity(line: FormulaLine, value: number) {
-  if (line.line_type === "packaging") {
+  if (line.quantity_basis === "per_can") {
     return Math.ceil(value).toLocaleString();
   }
 
@@ -342,7 +498,11 @@ function formatBasis(
   baseQuantity: number,
   baseUnitOfMeasure: string,
 ) {
-  if (line.line_type !== "packaging") {
+  if (line.quantity_basis === "percentage") {
+    return `${formatQuantity(line.quantity)}%`;
+  }
+
+  if (line.quantity_basis !== "per_can") {
     return `${formatQuantity(line.quantity)} ${line.unit_of_measure} / ${formatQuantity(baseQuantity)} ${baseUnitOfMeasure}`;
   }
 

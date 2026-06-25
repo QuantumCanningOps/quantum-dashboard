@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { Suspense } from "react";
 
@@ -37,7 +38,12 @@ async function ClientsList() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-bold">Clients</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Clients</h1>
+        <Button asChild>
+          <Link href="/dashboard/formulas/new">+ New Formula</Link>
+        </Button>
+      </div>
 
       <div className="grid md:grid-cols-2 gap-6">
         {(clients ?? []).map((client) => {

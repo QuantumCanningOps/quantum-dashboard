@@ -298,6 +298,7 @@ export async function submitReceiving(data: {
 export type NewItemResult = {
   id: string;
   name: string;
+  item_type: string;
   unit_of_measure: string;
   requires_coa: boolean;
   shelf_life_days: number | null;
@@ -332,7 +333,7 @@ export async function createItem(data: {
       requires_coa: data.requiresCoa,
       shelf_life_days: data.shelfLifeDays,
     })
-    .select("id, name, unit_of_measure, requires_coa, shelf_life_days, client_id, supplier_id")
+    .select("id, name, item_type, unit_of_measure, requires_coa, shelf_life_days, client_id, supplier_id")
     .single();
 
   if (error) return { error: error.message };
