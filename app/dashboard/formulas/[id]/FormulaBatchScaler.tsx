@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Check, Pencil, X } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   LineRow,
   newLineDraft,
@@ -79,6 +79,7 @@ export function FormulaBatchScaler({
   const [bufferPercent, setBufferPercent] = useState(0);
 
   const [isEditing, setIsEditing] = useState(false);
+  const [currentLines, setCurrentLines] = useState(lines);
   const [lineDrafts, setLineDrafts] = useState<LineDraft[]>([]);
   const [extraItems, setExtraItems] = useState<ItemOption[]>([]);
   const allItems = [
@@ -88,8 +89,12 @@ export function FormulaBatchScaler({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  useEffect(() => {
+    setCurrentLines(lines);
+  }, [lines]);
+
   function startEditing() {
-    setLineDrafts(lines.length > 0 ? lines.map(lineToDraft) : [newLineDraft("ingredient")]);
+    setLineDrafts(currentLines.length > 0 ? currentLines.map(lineToDraft) : [newLineDraft("ingredient")]);
     setSaveError(null);
     setIsEditing(true);
   }
@@ -140,6 +145,24 @@ export function FormulaBatchScaler({
       setSaving(false);
       return;
     }
+    setCurrentLines(lineDrafts.map((line) => {
+      const item = allItems.find((i) => i.id === line.itemId);
+      return {
+        id: line.key,
+        item_id: line.itemId,
+        line_type: line.lineType,
+        quantity: Number(line.quantity),
+        unit_of_measure: line.unitOfMeasure.trim(),
+        quantity_basis: line.quantityBasis,
+        items: item
+          ? {
+              name: item.name,
+              item_type: item.item_type,
+              unit_of_measure: item.unit_of_measure,
+            }
+          : null,
+      };
+    }));
     setSaving(false);
     setIsEditing(false);
   }
@@ -342,7 +365,7 @@ export function FormulaBatchScaler({
               </tr>
             </thead>
             <tbody>
-              {lines.map((line) => {
+              {currentLines.map((line) => {
                 const quantity = getRequiredQuantity(line, scale, filledCanCount);
                 const availableQuantity = getAvailableQuantity(
                   inventoryAvailability[line.item_id],
