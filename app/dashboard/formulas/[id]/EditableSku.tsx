@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Pencil } from "lucide-react";
@@ -27,6 +27,7 @@ export function EditableSku({
   clientSkus: SkuOption[];
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [currentLinkedSkus, setCurrentLinkedSkus] = useState(linkedSkus);
   const [skuId, setSkuId] = useState(linkedSkus[0]?.id ?? "");
   const [creatingSku, setCreatingSku] = useState(false);
   const [extraSkus, setExtraSkus] = useState<SkuOption[]>([]);
@@ -38,8 +39,12 @@ export function EditableSku({
     ...extraSkus.filter((s) => !initialClientSkus.some((is) => is.id === s.id)),
   ];
 
+  useEffect(() => {
+    setCurrentLinkedSkus(linkedSkus);
+  }, [linkedSkus]);
+
   function startEditing() {
-    setSkuId(linkedSkus[0]?.id ?? "");
+    setSkuId(currentLinkedSkus[0]?.id ?? "");
     setCreatingSku(false);
     setError(null);
     setIsEditing(true);
@@ -66,13 +71,15 @@ export function EditableSku({
     const result = await updateFormulaSku({
       formulaId,
       newSkuId: skuId || null,
-      previousSkuIds: linkedSkus.map((s) => s.id),
+      previousSkuIds: currentLinkedSkus.map((s) => s.id),
     });
     if (!result.success) {
       setError(result.error);
       setSaving(false);
       return;
     }
+    const selectedSku = allClientSkus.find((s) => s.id === skuId);
+    setCurrentLinkedSkus(selectedSku ? [selectedSku] : []);
     setSaving(false);
     setIsEditing(false);
   }
@@ -136,10 +143,10 @@ export function EditableSku({
           </>
         ) : (
           <ul className="flex flex-col gap-2">
-            {linkedSkus.length === 0 && (
+            {currentLinkedSkus.length === 0 && (
               <li className="text-sm text-muted-foreground">No SKU linked.</li>
             )}
-            {linkedSkus.map((sku) => (
+            {currentLinkedSkus.map((sku) => (
               <li key={sku.id} className="flex items-center gap-2 text-sm">
                 <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
                   {sku.code}
