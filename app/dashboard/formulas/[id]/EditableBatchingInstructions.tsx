@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Pencil } from "lucide-react";
@@ -14,12 +14,17 @@ export function EditableBatchingInstructions({
   batchingInstructions: string | null;
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [currentBatchingInstructions, setCurrentBatchingInstructions] = useState(batchingInstructions);
   const [draft, setDraft] = useState(batchingInstructions ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    setCurrentBatchingInstructions(batchingInstructions);
+  }, [batchingInstructions]);
+
   function startEditing() {
-    setDraft(batchingInstructions ?? "");
+    setDraft(currentBatchingInstructions ?? "");
     setError(null);
     setIsEditing(true);
   }
@@ -27,12 +32,15 @@ export function EditableBatchingInstructions({
   async function handleSave() {
     setSaving(true);
     setError(null);
-    const result = await updateBatchingInstructions(formulaId, draft.trim() || null);
+    const nextBatchingInstructions = draft.trim() || null;
+    const result = await updateBatchingInstructions(formulaId, nextBatchingInstructions);
     if (!result.success) {
       setError(result.error);
       setSaving(false);
       return;
     }
+    setCurrentBatchingInstructions(nextBatchingInstructions);
+    setDraft(nextBatchingInstructions ?? "");
     setSaving(false);
     setIsEditing(false);
   }
@@ -78,7 +86,7 @@ export function EditableBatchingInstructions({
           </>
         ) : (
           <p className="text-sm leading-6 text-muted-foreground">
-            {batchingInstructions ?? "No batching instructions recorded."}
+            {currentBatchingInstructions ?? "No batching instructions recorded."}
           </p>
         )}
       </CardContent>
