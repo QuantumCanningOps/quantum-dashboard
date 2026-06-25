@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -67,12 +67,17 @@ export function EditableSpecs({
   specs: FormulaSpec[];
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [currentSpecs, setCurrentSpecs] = useState(specs);
   const [drafts, setDrafts] = useState<SpecDraft[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    setCurrentSpecs(specs);
+  }, [specs]);
+
   function startEditing() {
-    setDrafts(specs.length > 0 ? specs.map(toDraft) : [newSpecDraft()]);
+    setDrafts(currentSpecs.length > 0 ? currentSpecs.map(toDraft) : [newSpecDraft()]);
     setError(null);
     setIsEditing(true);
   }
@@ -92,24 +97,34 @@ export function EditableSpecs({
   async function handleSave() {
     setSaving(true);
     setError(null);
+    const nextSpecs = drafts
+      .filter((d) => d.name.trim())
+      .map((d) => ({
+        id: d.key,
+        name: d.name.trim(),
+        min_value: d.minValue.trim() ? Number(d.minValue) : null,
+        target_value: d.targetValue.trim() ? Number(d.targetValue) : null,
+        max_value: d.maxValue.trim() ? Number(d.maxValue) : null,
+        unit: d.unit.trim() || null,
+        notes: d.notes.trim() || null,
+      }));
     const result = await updateFormulaSpecs(
       formulaId,
-      drafts
-        .filter((d) => d.name.trim())
-        .map((d) => ({
-          name: d.name.trim(),
-          minValue: d.minValue.trim() ? Number(d.minValue) : null,
-          targetValue: d.targetValue.trim() ? Number(d.targetValue) : null,
-          maxValue: d.maxValue.trim() ? Number(d.maxValue) : null,
-          unit: d.unit.trim() || null,
-          notes: d.notes.trim() || null,
-        }))
+      nextSpecs.map((spec) => ({
+        name: spec.name,
+        minValue: spec.min_value,
+        targetValue: spec.target_value,
+        maxValue: spec.max_value,
+        unit: spec.unit,
+        notes: spec.notes,
+      }))
     );
     if (!result.success) {
       setError(result.error);
       setSaving(false);
       return;
     }
+    setCurrentSpecs(nextSpecs);
     setSaving(false);
     setIsEditing(false);
   }
@@ -236,7 +251,7 @@ export function EditableSpecs({
                 </tr>
               </thead>
               <tbody>
-                {specs.map((spec) => (
+                {currentSpecs.map((spec) => (
                   <tr key={spec.id} className="border-b last:border-0">
                     <td className="py-2 pr-4 font-medium">{spec.name}</td>
                     <td className="py-2 text-right tabular-nums">
