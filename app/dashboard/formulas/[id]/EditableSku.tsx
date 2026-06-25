@@ -146,7 +146,7 @@ export function EditableSku({
                 </span>
                 <span className="font-medium">{sku.name}</span>
                 <span className="ml-auto text-muted-foreground">
-                  {sku.shelf_life_days} days
+                  {sku.shelf_life_days ?? "--"} days
                 </span>
               </li>
             ))}
