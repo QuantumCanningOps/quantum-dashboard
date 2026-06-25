@@ -93,25 +93,11 @@ export async function updateFormulaLines(
   const { supabase, user } = await requireInternalUser();
   if (!user) return { success: false, error: "Not authenticated" };
 
-  const { error: deleteError } = await supabase
-    .from("formula_lines")
-    .delete()
-    .eq("formula_id", formulaId);
-  if (deleteError) return { success: false, error: deleteError.message };
-
-  if (lines.length > 0) {
-    const { error: insertError } = await supabase.from("formula_lines").insert(
-      lines.map((line) => ({
-        formula_id: formulaId,
-        item_id: line.itemId,
-        line_type: line.lineType,
-        quantity: line.quantity,
-        unit_of_measure: line.unitOfMeasure,
-        quantity_basis: line.quantityBasis,
-      }))
-    );
-    if (insertError) return { success: false, error: insertError.message };
-  }
+  const { error } = await supabase.rpc("replace_formula_lines", {
+    p_formula_id: formulaId,
+    p_lines: lines,
+  });
+  if (error) return { success: false, error: error.message };
 
   revalidatePath(`/dashboard/formulas/${formulaId}`);
   return { success: true };
@@ -137,26 +123,11 @@ export async function updateFormulaSpecs(
   const { supabase, user } = await requireInternalUser();
   if (!user) return { success: false, error: "Not authenticated" };
 
-  const { error: deleteError } = await supabase
-    .from("formula_specs")
-    .delete()
-    .eq("formula_id", formulaId);
-  if (deleteError) return { success: false, error: deleteError.message };
-
-  if (specs.length > 0) {
-    const { error: insertError } = await supabase.from("formula_specs").insert(
-      specs.map((spec) => ({
-        formula_id: formulaId,
-        name: spec.name,
-        target_value: spec.targetValue,
-        min_value: spec.minValue,
-        max_value: spec.maxValue,
-        unit: spec.unit,
-        notes: spec.notes,
-      }))
-    );
-    if (insertError) return { success: false, error: insertError.message };
-  }
+  const { error } = await supabase.rpc("replace_formula_specs", {
+    p_formula_id: formulaId,
+    p_specs: specs,
+  });
+  if (error) return { success: false, error: error.message };
 
   revalidatePath(`/dashboard/formulas/${formulaId}`);
   return { success: true };
