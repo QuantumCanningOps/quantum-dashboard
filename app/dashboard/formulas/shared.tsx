@@ -375,20 +375,20 @@ export function LineRow({
           </select>
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label className="text-xs">Ingredient *</Label>
+          <Label className="text-xs">Item *</Label>
           <select
             className={SEL}
             value={creatingItem ? "__new__" : line.itemId}
             onChange={(e) => handleItemChange(e.target.value)}
           >
-            <option value="" className={OPT}>Select ingredient…</option>
+            <option value="" className={OPT}>Select item…</option>
             {availableItems.map((item) => (
               <option key={item.id} value={item.id} className={OPT}>
                 {item.name}
               </option>
             ))}
             <option disabled className={OPT}>──────────</option>
-            <option value="__new__" className={OPT}>+ Create new ingredient…</option>
+            <option value="__new__" className={OPT}>+ Create new item…</option>
           </select>
         </div>
       </div>
