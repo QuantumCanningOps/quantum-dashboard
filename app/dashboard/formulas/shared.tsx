@@ -120,7 +120,13 @@ export function NewSkuForm({
   }
 
   return (
-    <div className="rounded-md border border-dashed border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 flex flex-col gap-3">
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void handleSave();
+      }}
+      className="rounded-md border border-dashed border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 flex flex-col gap-3"
+    >
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold text-blue-800 dark:text-blue-200">New SKU</span>
         <button
@@ -163,10 +169,10 @@ export function NewSkuForm({
 
       {error && <p className="text-xs text-destructive">{error}</p>}
 
-      <Button size="sm" disabled={!isValid || saving} onClick={handleSave}>
+      <Button type="submit" size="sm" disabled={!isValid || saving}>
         {saving ? "Saving…" : "Save SKU"}
       </Button>
-    </div>
+    </form>
   );
 }
 
@@ -217,7 +223,13 @@ export function NewIngredientForm({
   }
 
   return (
-    <div className="rounded-md border border-dashed border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 flex flex-col gap-3">
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void handleSave();
+      }}
+      className="rounded-md border border-dashed border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 flex flex-col gap-3"
+    >
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold text-blue-800 dark:text-blue-200">New Item</span>
         <button
@@ -261,10 +273,10 @@ export function NewIngredientForm({
 
       {error && <p className="text-xs text-destructive">{error}</p>}
 
-      <Button size="sm" disabled={!isValid || saving} onClick={handleSave}>
+      <Button type="submit" size="sm" disabled={!isValid || saving}>
         {saving ? "Saving…" : "Save Item"}
       </Button>
-    </div>
+    </form>
   );
 }
 
