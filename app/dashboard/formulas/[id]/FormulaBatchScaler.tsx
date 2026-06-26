@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Check, Pencil, X } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   LineRow,
@@ -74,6 +75,7 @@ export function FormulaBatchScaler({
   items: initialItems,
   inventoryAvailability,
 }: FormulaBatchScalerProps) {
+  const router = useRouter();
   const [batchAmount, setBatchAmount] = useState(baseQuantity);
   const [batchUnit, setBatchUnit] = useState<BatchUnit>("gallons");
   const [bufferPercent, setBufferPercent] = useState(0);
@@ -165,6 +167,7 @@ export function FormulaBatchScaler({
     }));
     setSaving(false);
     setIsEditing(false);
+    router.refresh();
   }
 
   const presetBatchSizes = useMemo(() => {
