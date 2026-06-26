@@ -23,7 +23,7 @@ async function NewFormulaContent() {
       .order("name"),
     supabase
       .from("skus")
-      .select("id, client_id, code, name, shelf_life_days")
+      .select("id, client_id, code, name, shelf_life_days, formula_id")
       .order("code"),
   ]);
 

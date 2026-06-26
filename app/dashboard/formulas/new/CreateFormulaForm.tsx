@@ -171,6 +171,7 @@ export function CreateFormulaForm({
 
   // Formula lines
   const [lines, setLines] = useState<LineDraft[]>([newLineDraft("ingredient")]);
+  const [loadingFormulaLines, setLoadingFormulaLines] = useState(false);
 
   // Documents
   const [paLetterFile, setPaLetterFile] = useState<File | null>(null);
@@ -203,13 +204,48 @@ export function CreateFormulaForm({
     setExtraItems((prev) => [...prev, item]);
   }
 
-  function handleSkuChange(value: string) {
+  async function handleSkuChange(value: string) {
     if (value === "__new__") {
       setCreatingSku(true);
       return;
     }
     setCreatingSku(false);
     setSkuId(value);
+    setSubmitError(null);
+
+    const selectedSku = allSkus.find((s) => s.id === value);
+    if (!selectedSku?.formula_id) {
+      return;
+    }
+
+    setLoadingFormulaLines(true);
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("formula_lines")
+      .select("id, item_id, line_type, quantity, unit_of_measure, quantity_basis")
+      .eq("formula_id", selectedSku.formula_id)
+      .order("line_type")
+      .order("quantity", { ascending: false });
+
+    setLoadingFormulaLines(false);
+    if (error) {
+      setSubmitError(error.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      return;
+    }
+
+    setLines(
+      data.map((line) => ({
+        key: line.id,
+        lineType: line.line_type as LineType,
+        itemId: line.item_id,
+        quantity: String(line.quantity),
+        unitOfMeasure: line.unit_of_measure,
+        quantityBasis: line.quantity_basis as LineDraft["quantityBasis"],
+      }))
+    );
   }
 
   function handleSkuCreated(sku: NewSkuResult) {
@@ -377,7 +413,9 @@ export function CreateFormulaForm({
                 id="sku"
                 className={SEL}
                 value={creatingSku ? "__new__" : skuId}
-                onChange={(e) => handleSkuChange(e.target.value)}
+                onChange={(e) => {
+                  void handleSkuChange(e.target.value);
+                }}
               >
                 <option value="" className={OPT}>Select SKU…</option>
                 {allSkus
@@ -489,6 +527,11 @@ export function CreateFormulaForm({
           {!clientId && (
             <p className="text-sm text-muted-foreground">
               Select a client above to filter available ingredients.
+            </p>
+          )}
+          {loadingFormulaLines && (
+            <p className="text-sm text-muted-foreground">
+              Loading existing formula lines…
             </p>
           )}
 
