@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -131,6 +131,7 @@ export function CreateFormulaForm({
   skus: SkuOption[];
 }) {
   const router = useRouter();
+  const formulaLinesRequestId = useRef(0);
 
   // Clients — seeded from server, extended client-side when a new one is created.
   // Server actions below call revalidatePath, which can refresh initialClients
@@ -205,8 +206,10 @@ export function CreateFormulaForm({
   }
 
   async function handleSkuChange(value: string) {
+    const requestId = ++formulaLinesRequestId.current;
     if (value === "__new__") {
       setCreatingSku(true);
+      setLoadingFormulaLines(false);
       return;
     }
     setCreatingSku(false);
@@ -215,6 +218,7 @@ export function CreateFormulaForm({
 
     const selectedSku = allSkus.find((s) => s.id === value);
     if (!selectedSku?.formula_id) {
+      setLoadingFormulaLines(false);
       return;
     }
 
@@ -232,6 +236,10 @@ export function CreateFormulaForm({
         .eq("formula_id", selectedSku.formula_id)
         .order("line_type")
         .order("quantity", { ascending: false });
+
+    if (requestId !== formulaLinesRequestId.current) {
+      return;
+    }
 
       if (error) {
         errorMessage = error.message;
