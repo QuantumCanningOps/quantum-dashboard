@@ -220,16 +220,32 @@ export function CreateFormulaForm({
 
     setLoadingFormulaLines(true);
     const supabase = createClient();
-    const { data, error } = await supabase
-      .from("formula_lines")
-      .select("id, item_id, line_type, quantity, unit_of_measure, quantity_basis")
-      .eq("formula_id", selectedSku.formula_id)
-      .order("line_type")
-      .order("quantity", { ascending: false });
+    type FormulaLineRow = { id: string; item_id: string; line_type: string; quantity: number; unit_of_measure: string; quantity_basis: string };
 
-    setLoadingFormulaLines(false);
-    if (error) {
-      setSubmitError(error.message);
+    let data: FormulaLineRow[] | null = null;
+    let errorMessage: string | null = null;
+
+    try {
+      const { data: fetched, error } = await supabase
+        .from("formula_lines")
+        .select("id, item_id, line_type, quantity, unit_of_measure, quantity_basis")
+        .eq("formula_id", selectedSku.formula_id)
+        .order("line_type")
+        .order("quantity", { ascending: false });
+
+      if (error) {
+        errorMessage = error.message;
+      } else {
+        data = fetched as FormulaLineRow[] | null;
+      }
+    } catch (e) {
+      errorMessage = e instanceof Error ? e.message : "Failed to load formula lines";
+    } finally {
+      setLoadingFormulaLines(false);
+    }
+
+    if (errorMessage) {
+      setSubmitError(errorMessage);
       return;
     }
     if (!data || data.length === 0) {
