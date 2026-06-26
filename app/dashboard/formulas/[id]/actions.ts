@@ -48,23 +48,24 @@ export async function updateFormulaSku(data: {
   const { supabase, user } = await requireInternalUser();
   if (!user) return { success: false, error: "Not authenticated" };
 
+  const { data: formulaRow, error: formulaError } = await supabase
+    .from("formulas")
+    .select("client_id")
+    .eq("id", data.formulaId)
+    .single();
+  if (formulaError) return { success: false, error: formulaError.message };
+
   const toUnlink = data.previousSkuIds.filter((id) => id !== data.newSkuId);
   if (toUnlink.length > 0) {
     const { error } = await supabase
       .from("skus")
       .update({ formula_id: null })
-      .in("id", toUnlink);
+      .in("id", toUnlink)
+      .eq("client_id", formulaRow.client_id);
     if (error) return { success: false, error: error.message };
   }
 
   if (data.newSkuId) {
-    const { data: formulaRow, error: formulaError } = await supabase
-      .from("formulas")
-      .select("client_id")
-      .eq("id", data.formulaId)
-      .single();
-    if (formulaError) return { success: false, error: formulaError.message };
-
     const { data: updatedRows, error } = await supabase
       .from("skus")
       .update({ formula_id: data.formulaId })
