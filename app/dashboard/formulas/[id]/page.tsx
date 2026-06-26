@@ -4,24 +4,18 @@ import {
   type FormulaLine,
   type InventoryAvailability,
 } from "./FormulaBatchScaler";
+import { EditableSku, type SkuRow } from "./EditableSku";
+import { EditableBatchingInstructions } from "./EditableBatchingInstructions";
+import { EditableSpecs, type FormulaSpec } from "./EditableSpecs";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import type { ItemOption, SkuOption } from "../shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
 type FormulaPageProps = {
   params: Promise<{ id: string }>;
-};
-
-type FormulaSpec = {
-  id: string;
-  name: string;
-  target_value: number | null;
-  min_value: number | null;
-  max_value: number | null;
-  unit: string | null;
-  notes: string | null;
 };
 
 export default function FormulaPage({ params }: FormulaPageProps) {
@@ -36,26 +30,32 @@ async function FormulaDetail({ params }: FormulaPageProps) {
   const { id } = await params;
   const supabase = await createClient();
 
+  const { data: formula } = await supabase
+    .from("formulas")
+    .select(
+      "id, client_id, formula_number, name, version, base_quantity, base_unit_of_measure, batching_instructions, status, notes, created_at, clients(name, code)"
+    )
+    .eq("id", id)
+    .single();
+
+  if (!formula) {
+    notFound();
+  }
+
   const [
-    { data: formula },
     { data: skus },
     { data: lines },
     { data: specs },
+    { data: items },
+    { data: clientSkus },
   ] = await Promise.all([
-    supabase
-      .from("formulas")
-      .select(
-        "id, client_id, formula_number, name, version, base_quantity, base_unit_of_measure, batching_instructions, status, notes, created_at, clients(name, code)"
-      )
-      .eq("id", id)
-      .single(),
     supabase
       .from("skus")
       .select("id, code, name, shelf_life_days")
       .eq("formula_id", id),
     supabase
       .from("formula_lines")
-      .select("id, item_id, line_type, quantity, unit_of_measure, items(name, item_type, unit_of_measure)")
+      .select("id, item_id, line_type, quantity, unit_of_measure, quantity_basis, items(name, item_type, unit_of_measure)")
       .eq("formula_id", id)
       .order("line_type")
       .order("quantity", { ascending: false }),
@@ -64,15 +64,23 @@ async function FormulaDetail({ params }: FormulaPageProps) {
       .select("id, name, target_value, min_value, max_value, unit, notes")
       .eq("formula_id", id)
       .order("name"),
+    supabase
+      .from("items")
+      .select(
+        "id, name, item_type, unit_of_measure, requires_coa, shelf_life_days, client_id, supplier_id"
+      )
+      .order("name"),
+    supabase
+      .from("skus")
+      .select("id, client_id, code, name, shelf_life_days")
+      .eq("client_id", formula.client_id)
+      .order("code"),
   ]);
-
-  if (!formula) {
-    notFound();
-  }
 
   const client = formula.clients as unknown as { name: string; code: string } | null;
   const formulaLines = (lines ?? []) as unknown as FormulaLine[];
   const formulaSpecs = (specs ?? []) as FormulaSpec[];
+  const linkedSkus = (skus ?? []) as SkuRow[];
   const inventoryAvailability = await getInventoryAvailability(
     supabase,
     formulaLines,
@@ -106,86 +114,30 @@ async function FormulaDetail({ params }: FormulaPageProps) {
       </div>
 
       <div className="grid md:grid-cols-[1fr_2fr] gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">SKU</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="flex flex-col gap-2">
-              {(skus ?? []).map((sku) => (
-                <li key={sku.id} className="flex items-center gap-2 text-sm">
-                  <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
-                    {sku.code}
-                  </span>
-                  <span className="font-medium">{sku.name}</span>
-                  <span className="ml-auto text-muted-foreground">
-                    {sku.shelf_life_days} days
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+        <EditableSku
+          formulaId={formula.id}
+          clientId={formula.client_id}
+          linkedSkus={linkedSkus}
+          clientSkus={(clientSkus ?? []) as SkuOption[]}
+        />
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Batching Instructions</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm leading-6 text-muted-foreground">
-              {formula.batching_instructions ?? "No batching instructions recorded."}
-            </p>
-          </CardContent>
-        </Card>
+        <EditableBatchingInstructions
+          formulaId={formula.id}
+          batchingInstructions={formula.batching_instructions}
+        />
       </div>
 
       <FormulaBatchScaler
         baseQuantity={Number(formula.base_quantity)}
         baseUnitOfMeasure={formula.base_unit_of_measure}
         clientId={formula.client_id}
+        formulaId={formula.id}
         lines={formulaLines}
+        items={(items ?? []) as ItemOption[]}
         inventoryAvailability={inventoryAvailability}
       />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Specs</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-muted-foreground">
-                  <th className="pb-2 text-left font-medium">Name</th>
-                  <th className="pb-2 text-right font-medium">Min</th>
-                  <th className="pb-2 text-right font-medium">Target</th>
-                  <th className="pb-2 text-right font-medium">Max</th>
-                  <th className="pb-2 text-left font-medium">Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {formulaSpecs.map((spec) => (
-                  <tr key={spec.id} className="border-b last:border-0">
-                    <td className="py-2 pr-4 font-medium">{spec.name}</td>
-                    <td className="py-2 text-right tabular-nums">
-                      {formatSpecValue(spec.min_value, spec.unit)}
-                    </td>
-                    <td className="py-2 text-right tabular-nums">
-                      {formatSpecValue(spec.target_value, spec.unit)}
-                    </td>
-                    <td className="py-2 text-right tabular-nums">
-                      {formatSpecValue(spec.max_value, spec.unit)}
-                    </td>
-                    <td className="py-2 pl-4 text-muted-foreground">
-                      {spec.notes ?? ""}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+      <EditableSpecs formulaId={formula.id} specs={formulaSpecs} />
     </div>
   );
 }
@@ -229,13 +181,6 @@ function FormulaStatusBadge({ status }: { status: string }) {
     retired: "Retired",
   };
   return <Badge className={map[status] ?? ""}>{labels[status] ?? status}</Badge>;
-}
-
-function formatSpecValue(value: number | null, unit: string | null) {
-  if (value === null) {
-    return "-";
-  }
-  return `${Number(value).toLocaleString()}${unit ? ` ${unit}` : ""}`;
 }
 
 async function getInventoryAvailability(

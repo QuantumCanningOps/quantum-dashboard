@@ -138,9 +138,9 @@ function NewItemForm({
   }
 
   return (
-    <div className="rounded-md border border-dashed border-blue-300 bg-blue-50 p-3 flex flex-col gap-3">
+    <div className="rounded-md border border-dashed border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-3 flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-blue-800">New Item</span>
+        <span className="text-xs font-semibold text-blue-800 dark:text-blue-200">New Item</span>
         <button
           type="button"
           onClick={onCancel}

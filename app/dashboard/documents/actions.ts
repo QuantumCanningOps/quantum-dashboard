@@ -33,6 +33,7 @@ export async function createDocumentRecord(data: {
       formula_id: data.formulaId ?? null,
       third_party_logistics_id: data.thirdPartyLogisticsId ?? null,
       carrier_name: data.carrierName ?? null,
+      artwork_status: data.documentType === "artwork" ? "pending_review" : null,
     })
     .select("id")
     .single();
