@@ -118,7 +118,7 @@ export function FormulaBatchScaler({
   const lineDraftErrors: Record<string, string[]> = {};
   for (const line of lineDrafts) {
     const errs: string[] = [];
-    if (!line.itemId) errs.push("ingredient");
+    if (!line.itemId) errs.push("item");
     if (!line.quantity || Number(line.quantity) <= 0) errs.push("quantity");
     if (!line.unitOfMeasure.trim()) errs.push("unit");
     if (errs.length > 0) lineDraftErrors[line.key] = errs;
