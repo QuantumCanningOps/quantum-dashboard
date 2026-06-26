@@ -14,6 +14,7 @@ const navLinks = [
   { href: "/dashboard/inventory", label: "Lot Detail" },
   { href: "/dashboard/receiving", label: "Receiving" },
   { href: "/dashboard/clients", label: "Clients" },
+  { href: "/dashboard/formulas/new", label: "New Formula" },
   { href: "/dashboard/documents", label: "Documents" },
   { href: "/dashboard/needs-attention", label: "Needs Attention" },
 ];
