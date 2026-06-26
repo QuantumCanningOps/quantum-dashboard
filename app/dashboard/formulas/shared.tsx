@@ -28,6 +28,7 @@ export type SkuOption = {
   code: string;
   name: string;
   shelf_life_days: number | null;
+  formula_id?: string | null;
 };
 
 export type LineType = "ingredient" | "packaging";

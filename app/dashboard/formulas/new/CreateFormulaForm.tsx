@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -131,6 +131,7 @@ export function CreateFormulaForm({
   skus: SkuOption[];
 }) {
   const router = useRouter();
+  const formulaLinesRequestId = useRef(0);
 
   // Clients — seeded from server, extended client-side when a new one is created.
   // Server actions below call revalidatePath, which can refresh initialClients
@@ -171,6 +172,7 @@ export function CreateFormulaForm({
 
   // Formula lines
   const [lines, setLines] = useState<LineDraft[]>([newLineDraft("ingredient")]);
+  const [loadingFormulaLines, setLoadingFormulaLines] = useState(false);
 
   // Documents
   const [paLetterFile, setPaLetterFile] = useState<File | null>(null);
@@ -203,13 +205,71 @@ export function CreateFormulaForm({
     setExtraItems((prev) => [...prev, item]);
   }
 
-  function handleSkuChange(value: string) {
+  async function handleSkuChange(value: string) {
+    const requestId = ++formulaLinesRequestId.current;
     if (value === "__new__") {
       setCreatingSku(true);
+      setLoadingFormulaLines(false);
       return;
     }
     setCreatingSku(false);
     setSkuId(value);
+    setSubmitError(null);
+
+    const selectedSku = allSkus.find((s) => s.id === value);
+    if (!selectedSku?.formula_id) {
+      setLoadingFormulaLines(false);
+      return;
+    }
+
+    setLoadingFormulaLines(true);
+    const supabase = createClient();
+    type FormulaLineRow = { id: string; item_id: string; line_type: string; quantity: number; unit_of_measure: string; quantity_basis: string };
+
+    let data: FormulaLineRow[] | null = null;
+    let errorMessage: string | null = null;
+
+    try {
+      const { data: fetched, error } = await supabase
+        .from("formula_lines")
+        .select("id, item_id, line_type, quantity, unit_of_measure, quantity_basis")
+        .eq("formula_id", selectedSku.formula_id)
+        .order("line_type")
+        .order("quantity", { ascending: false });
+
+    if (requestId !== formulaLinesRequestId.current) {
+      return;
+    }
+
+      if (error) {
+        errorMessage = error.message;
+      } else {
+        data = fetched as FormulaLineRow[] | null;
+      }
+    } catch (e) {
+      errorMessage = e instanceof Error ? e.message : "Failed to load formula lines";
+    } finally {
+      setLoadingFormulaLines(false);
+    }
+
+    if (errorMessage) {
+      setSubmitError(errorMessage);
+      return;
+    }
+    if (!data || data.length === 0) {
+      return;
+    }
+
+    setLines(
+      data.map((line) => ({
+        key: line.id,
+        lineType: line.line_type as LineType,
+        itemId: line.item_id,
+        quantity: String(line.quantity),
+        unitOfMeasure: line.unit_of_measure,
+        quantityBasis: line.quantity_basis as LineDraft["quantityBasis"],
+      }))
+    );
   }
 
   function handleSkuCreated(sku: NewSkuResult) {
@@ -377,7 +437,9 @@ export function CreateFormulaForm({
                 id="sku"
                 className={SEL}
                 value={creatingSku ? "__new__" : skuId}
-                onChange={(e) => handleSkuChange(e.target.value)}
+                onChange={(e) => {
+                  void handleSkuChange(e.target.value);
+                }}
               >
                 <option value="" className={OPT}>Select SKU…</option>
                 {allSkus
@@ -489,6 +551,11 @@ export function CreateFormulaForm({
           {!clientId && (
             <p className="text-sm text-muted-foreground">
               Select a client above to filter available ingredients.
+            </p>
+          )}
+          {loadingFormulaLines && (
+            <p className="text-sm text-muted-foreground">
+              Loading existing formula lines…
             </p>
           )}
 
