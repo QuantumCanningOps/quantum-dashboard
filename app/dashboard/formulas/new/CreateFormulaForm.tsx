@@ -247,7 +247,7 @@ export function CreateFormulaForm({
   const lineErrors: Record<string, string[]> = {};
   for (const line of lines) {
     const errs: string[] = [];
-    if (!line.itemId) errs.push("ingredient");
+    if (!line.itemId) errs.push("item");
     if (!line.quantity || Number(line.quantity) <= 0) errs.push("quantity");
     if (!line.unitOfMeasure.trim()) errs.push("unit");
     if (errs.length > 0) lineErrors[line.key] = errs;
