@@ -181,24 +181,16 @@ async function ClientDetail({ params }: DetailPageProps) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <Link
-          href="/dashboard/clients"
-          className="text-sm text-muted-foreground hover:text-foreground hover:underline"
-        >
-          ← Clients
-        </Link>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold">{client.name}</h1>
-          <Badge className="bg-slate-100 text-slate-600 border-slate-200 font-mono">
-            {client.code}
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-2xl font-bold">{client.name}</h2>
+        <Badge className="bg-slate-100 text-slate-600 border-slate-200 font-mono">
+          {client.code}
+        </Badge>
+        {!client.active && (
+          <Badge className="bg-red-100 text-red-700 border-red-200">
+            Inactive
           </Badge>
-          {!client.active && (
-            <Badge className="bg-red-100 text-red-700 border-red-200">
-              Inactive
-            </Badge>
-          )}
-        </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
@@ -692,10 +684,7 @@ function AvailableQty({ row }: { row: InventoryRow }) {
 function ClientDetailFallback() {
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3">
-        <div className="h-4 w-24 animate-pulse rounded bg-muted" />
-        <div className="h-8 w-56 animate-pulse rounded bg-muted" />
-      </div>
+      <div className="h-8 w-56 animate-pulse rounded bg-muted" />
       <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
         {Array.from({ length: 5 }).map((_, i) => (
           <Card key={i}>
