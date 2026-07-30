@@ -7,6 +7,7 @@ import {
 import { EditableSku, type SkuRow } from "./EditableSku";
 import { EditableBatchingInstructions } from "./EditableBatchingInstructions";
 import { EditableSpecs, type FormulaSpec } from "./EditableSpecs";
+import { ImportWarningBanner } from "./ImportWarningBanner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import type { ItemOption, SkuOption } from "../shared";
@@ -16,18 +17,20 @@ import { Suspense } from "react";
 
 type FormulaPageProps = {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ importWarn?: string }>;
 };
 
-export default function FormulaPage({ params }: FormulaPageProps) {
+export default function FormulaPage({ params, searchParams }: FormulaPageProps) {
   return (
     <Suspense fallback={<FormulaFallback />}>
-      <FormulaDetail params={params} />
+      <FormulaDetail params={params} searchParams={searchParams} />
     </Suspense>
   );
 }
 
-async function FormulaDetail({ params }: FormulaPageProps) {
+async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
   const { id } = await params;
+  const importWarn = ((await searchParams)?.importWarn ?? "").trim();
   const supabase = await createClient();
 
   const { data: formula } = await supabase
@@ -112,6 +115,8 @@ async function FormulaDetail({ params }: FormulaPageProps) {
           {formula.base_unit_of_measure}
         </p>
       </div>
+
+      {importWarn && <ImportWarningBanner message={importWarn} />}
 
       <div className="grid md:grid-cols-[1fr_2fr] gap-6">
         <EditableSku

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { matchItemByDescription } from "@/lib/match-item";
 import { randomId } from "@/lib/utils";
 import { type NewItemResult } from "../../receiving/actions";
 import {
@@ -205,23 +206,13 @@ export function CreateFormulaForm({
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   function matchItem(description: string, lineType: LineType): string {
-    const lower = description.toLowerCase().trim();
-    if (!lower) return "";
     const wanted = itemTypeForLine[lineType];
     const candidates = allItems.filter(
       (i) =>
         i.item_type === wanted &&
         (!clientId || !i.client_id || i.client_id === clientId)
     );
-    const exact = candidates.find((i) => i.name.toLowerCase() === lower);
-    if (exact) return exact.id;
-    return (
-      candidates.find(
-        (i) =>
-          i.name.toLowerCase().includes(lower) ||
-          lower.includes(i.name.toLowerCase())
-      )?.id ?? ""
-    );
+    return matchItemByDescription(description, candidates);
   }
 
   function normalizeExtractedLine(raw: ExtractedFormulaLine): {
@@ -599,12 +590,13 @@ export function CreateFormulaForm({
       }
 
       if (postCreateWarnings.length > 0) {
-        setSubmitError(
-          `Formula created, but ${postCreateWarnings.join("; ")}. Opening formula…`
+        const warn = encodeURIComponent(
+          postCreateWarnings.join("; ").slice(0, 500)
         );
+        router.push(`/dashboard/formulas/${result.id}?importWarn=${warn}`);
+      } else {
+        router.push(`/dashboard/formulas/${result.id}`);
       }
-
-      router.push(`/dashboard/formulas/${result.id}`);
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : "Upload failed");
     } finally {
