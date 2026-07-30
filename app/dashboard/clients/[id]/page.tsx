@@ -19,6 +19,18 @@ type InventoryRow = {
   quantity_available: number;
 };
 
+const LOT_STATUSES = [
+  "released",
+  "quarantine",
+  "on_hold",
+  "consumed",
+  "destroyed",
+] as const;
+
+const RECENT_ORDERS_LIMIT = 20;
+const RECENT_LOTS_LIMIT = 25;
+const INVENTORY_PREVIEW_LIMIT = 15;
+
 export default function ClientDetailPage({ params }: DetailPageProps) {
   return (
     <Suspense fallback={<ClientDetailFallback />}>
@@ -39,14 +51,26 @@ async function ClientDetail({ params }: DetailPageProps) {
 
   if (!client) notFound();
 
+  const lotStatusCountQueries = LOT_STATUSES.map((status) =>
+    supabase
+      .from("lots")
+      .select("*", { count: "exact", head: true })
+      .eq("client_id", id)
+      .eq("status", status),
+  );
+
   const [
     { data: contacts },
     { data: skus },
-    { data: lotStatuses },
+    { count: totalLotsCount },
+    { count: attentionLotsCount },
     { data: recentLots },
     { data: openOrderRows },
+    { count: openOrdersCount },
     { data: recentOrders },
+    { count: totalOrdersCount },
     { data: inventory },
+    ...lotStatusCountResults
   ] = await Promise.all([
     supabase
       .from("contacts")
@@ -62,7 +86,15 @@ async function ClientDetail({ params }: DetailPageProps) {
       )
       .eq("client_id", id)
       .order("code"),
-    supabase.from("lots").select("id, status").eq("client_id", id),
+    supabase
+      .from("lots")
+      .select("*", { count: "exact", head: true })
+      .eq("client_id", id),
+    supabase
+      .from("lots")
+      .select("*", { count: "exact", head: true })
+      .eq("client_id", id)
+      .in("status", ["quarantine", "on_hold"]),
     supabase
       .from("lots")
       .select(
@@ -70,7 +102,7 @@ async function ClientDetail({ params }: DetailPageProps) {
       )
       .eq("client_id", id)
       .order("received_at", { ascending: false })
-      .limit(25),
+      .limit(RECENT_LOTS_LIMIT),
     supabase
       .from("production_orders")
       .select(
@@ -81,12 +113,21 @@ async function ClientDetail({ params }: DetailPageProps) {
       .order("created_at", { ascending: false }),
     supabase
       .from("production_orders")
+      .select("*", { count: "exact", head: true })
+      .eq("client_id", id)
+      .in("status", ["pending", "scheduled", "in_progress"]),
+    supabase
+      .from("production_orders")
       .select(
         "id, order_number, sku_id, ordered_quantity, actual_quantity, unit_of_measure, status, created_at, skus(code, name)",
       )
       .eq("client_id", id)
       .order("created_at", { ascending: false })
-      .limit(20),
+      .limit(RECENT_ORDERS_LIMIT),
+    supabase
+      .from("production_orders")
+      .select("*", { count: "exact", head: true })
+      .eq("client_id", id),
     supabase
       .from("inventory_item_summary")
       .select(
@@ -94,10 +135,13 @@ async function ClientDetail({ params }: DetailPageProps) {
       )
       .eq("client_id", id)
       .order("item_name"),
+    ...lotStatusCountQueries,
   ]);
 
   const openOrders = openOrderRows ?? [];
-  const allOrders = recentOrders ?? [];
+  const orderRows = recentOrders ?? [];
+  const openOrderCount = openOrdersCount ?? openOrders.length;
+  const totalOrderCount = totalOrdersCount ?? orderRows.length;
   const ordersBySku = openOrders.reduce(
     (acc, o) => {
       if (o.sku_id) (acc[o.sku_id] ??= []).push(o);
@@ -106,24 +150,34 @@ async function ClientDetail({ params }: DetailPageProps) {
     {} as Record<string, typeof openOrders>,
   );
 
-  const allLotStatuses = lotStatuses ?? [];
-  const lotsByStatus = allLotStatuses.reduce(
-    (acc, l) => {
-      acc[l.status] = (acc[l.status] ?? 0) + 1;
+  const totalLots = totalLotsCount ?? 0;
+  const attentionCount = attentionLotsCount ?? 0;
+  const lotsByStatus = LOT_STATUSES.reduce(
+    (acc, status, index) => {
+      const count = lotStatusCountResults[index]?.count ?? 0;
+      if (count > 0) acc[status] = count;
       return acc;
     },
     {} as Record<string, number>,
   );
-  const attentionCount = allLotStatuses.filter(
-    (l) => l.status === "quarantine" || l.status === "on_hold",
-  ).length;
   const clientLots = recentLots ?? [];
 
-  const inventoryRows = (inventory ?? []) as InventoryRow[];
+  const inventoryRows = [...((inventory ?? []) as InventoryRow[])].sort(
+    (a, b) => {
+      const aOver = Number(a.quantity_available) < 0 ? 0 : 1;
+      const bOver = Number(b.quantity_available) < 0 ? 0 : 1;
+      if (aOver !== bOver) return aOver - bOver;
+      const aReserved = Number(a.quantity_reserved) > 0 ? 0 : 1;
+      const bReserved = Number(b.quantity_reserved) > 0 ? 0 : 1;
+      if (aReserved !== bReserved) return aReserved - bReserved;
+      return a.item_name.localeCompare(b.item_name);
+    },
+  );
   const overBooked = inventoryRows.filter((r) => r.quantity_available < 0).length;
   const withReservations = inventoryRows.filter(
     (r) => r.quantity_reserved > 0,
   ).length;
+  const inventoryPreview = inventoryRows.slice(0, INVENTORY_PREVIEW_LIMIT);
 
   return (
     <div className="flex flex-col gap-6">
@@ -149,8 +203,8 @@ async function ClientDetail({ params }: DetailPageProps) {
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
         <StatCard label="SKUs" value={(skus ?? []).length} />
-        <StatCard label="Open Orders" value={openOrders.length} />
-        <StatCard label="Total Lots" value={allLotStatuses.length} />
+        <StatCard label="Open Orders" value={openOrderCount} />
+        <StatCard label="Total Lots" value={totalLots} />
         <StatCard
           label="Needs Attention"
           value={attentionCount}
@@ -181,7 +235,7 @@ async function ClientDetail({ params }: DetailPageProps) {
                   </span>
                 </span>
               ))}
-              {allLotStatuses.length === 0 && (
+              {totalLots === 0 && (
                 <p className="text-sm text-muted-foreground">No lots yet</p>
               )}
             </div>
@@ -316,9 +370,9 @@ async function ClientDetail({ params }: DetailPageProps) {
         <CardHeader className="flex flex-row items-center justify-between gap-4">
           <CardTitle className="text-base">
             Production Orders
-            {openOrders.length > 0 && (
+            {openOrderCount > 0 && (
               <span className="ml-2 font-normal text-muted-foreground">
-                ({openOrders.length} open)
+                ({openOrderCount} open)
               </span>
             )}
           </CardTitle>
@@ -339,7 +393,7 @@ async function ClientDetail({ params }: DetailPageProps) {
                 </tr>
               </thead>
               <tbody>
-                {allOrders.map((order) => {
+                {orderRows.map((order) => {
                   const sku = order.skus as unknown as {
                     code: string;
                     name: string;
@@ -384,7 +438,7 @@ async function ClientDetail({ params }: DetailPageProps) {
                     </tr>
                   );
                 })}
-                {allOrders.length === 0 && (
+                {orderRows.length === 0 && (
                   <tr>
                     <td
                       colSpan={5}
@@ -397,6 +451,17 @@ async function ClientDetail({ params }: DetailPageProps) {
               </tbody>
             </table>
           </div>
+          {totalOrderCount > RECENT_ORDERS_LIMIT && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Showing {RECENT_ORDERS_LIMIT} of {totalOrderCount} orders.{" "}
+              <Link
+                href={`/dashboard/production-orders?clientId=${id}`}
+                className="hover:underline"
+              >
+                See all
+              </Link>
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -404,7 +469,9 @@ async function ClientDetail({ params }: DetailPageProps) {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-4">
             <CardTitle className="text-base">Recent Lots</CardTitle>
-            <ButtonLink href={`/dashboard/lots`}>View lots →</ButtonLink>
+            <ButtonLink href={`/dashboard/lots?clientId=${id}`}>
+              View lots →
+            </ButtonLink>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
@@ -465,6 +532,17 @@ async function ClientDetail({ params }: DetailPageProps) {
                 </tbody>
               </table>
             </div>
+            {totalLots > RECENT_LOTS_LIMIT && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                Showing {RECENT_LOTS_LIMIT} of {totalLots} lots.{" "}
+                <Link
+                  href={`/dashboard/lots?clientId=${id}`}
+                  className="hover:underline"
+                >
+                  See all
+                </Link>
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -492,7 +570,7 @@ async function ClientDetail({ params }: DetailPageProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {inventoryRows.slice(0, 15).map((row) => (
+                  {inventoryPreview.map((row) => (
                     <tr
                       key={row.item_id}
                       className="border-b last:border-0 hover:bg-muted/30"
@@ -519,9 +597,11 @@ async function ClientDetail({ params }: DetailPageProps) {
                 </tbody>
               </table>
             </div>
-            {inventoryRows.length > 15 && (
+            {inventoryRows.length > INVENTORY_PREVIEW_LIMIT && (
               <p className="mt-3 text-xs text-muted-foreground">
-                Showing 15 of {inventoryRows.length} items.{" "}
+                Showing {INVENTORY_PREVIEW_LIMIT} of {inventoryRows.length}{" "}
+                items
+                {overBooked > 0 ? " (over-booked first)" : ""}.{" "}
                 <Link
                   href={`/dashboard/inventory/summary?clientId=${id}`}
                   className="hover:underline"
@@ -673,12 +753,14 @@ function LotStatusBadge({ status }: { status: string }) {
     quarantine: "bg-yellow-100 text-yellow-800 border-yellow-200",
     on_hold: "bg-red-100 text-red-800 border-red-200",
     consumed: "bg-gray-100 text-gray-600 border-gray-200",
+    destroyed: "bg-gray-100 text-gray-600 border-gray-200",
   };
   const labels: Record<string, string> = {
     released: "Released",
     quarantine: "Quarantine",
     on_hold: "On Hold",
     consumed: "Consumed",
+    destroyed: "Destroyed",
   };
   return (
     <Badge className={map[status] ?? ""}>{labels[status] ?? status}</Badge>
