@@ -24,6 +24,8 @@ const CAN_SIZE_OUNCES = 12;
 const CANS_PER_TRAY = 24;
 const GRAMS_PER_KG = 1000;
 const GRAMS_PER_LB = 453.59237;
+/** Default product density used on Quantum batching sheets (Target Weight/Volume). */
+const DEFAULT_DENSITY_LBS_PER_GALLON = 8.4;
 const batchUnits = ["gallons", "cases", "cans"] as const;
 const requiredQtyUnits = ["g", "kg", "lbs"] as const;
 
@@ -85,9 +87,15 @@ export function FormulaBatchScaler({
   const [bufferPercent, setBufferPercent] = useState(0);
   const [requiredQtyUnit, setRequiredQtyUnit] =
     useState<RequiredQtyUnit>("lbs");
+  const [densityLbsPerGallon, setDensityLbsPerGallon] = useState(
+    DEFAULT_DENSITY_LBS_PER_GALLON,
+  );
 
   const [isEditing, setIsEditing] = useState(false);
   const [currentLines, setCurrentLines] = useState(lines);
+  const hasPercentageLines = currentLines.some(
+    (line) => line.quantity_basis === "percentage",
+  );
   const [lineDrafts, setLineDrafts] = useState<LineDraft[]>([]);
   const [extraItems, setExtraItems] = useState<ItemOption[]>([]);
   const allItems = [
@@ -239,6 +247,12 @@ export function FormulaBatchScaler({
               {batchUnit}
             </p>
           )}
+          {hasPercentageLines && (
+            <p className="mt-1 text-sm text-muted-foreground">
+              % lines → weight using density {formatQuantity(densityLbsPerGallon)}{" "}
+              lbs/gal
+            </p>
+          )}
         </div>
 
         {!isEditing && (
@@ -302,6 +316,22 @@ export function FormulaBatchScaler({
               </div>
             </div>
           </div>
+          {hasPercentageLines && (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="density-lbs-per-gal">Density (lbs/gal)</Label>
+              <Input
+                id="density-lbs-per-gal"
+                type="number"
+                min="0"
+                step="0.001"
+                value={densityLbsPerGallon}
+                onChange={(event) =>
+                  setDensityLbsPerGallon(Math.max(0, Number(event.target.value)))
+                }
+                className="w-32"
+              />
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             {presetBatchSizes.map((preset) => (
               <Button
@@ -393,7 +423,13 @@ export function FormulaBatchScaler({
             </thead>
             <tbody>
               {currentLines.map((line) => {
-                const quantity = getRequiredQuantity(line, scale, filledCanCount);
+                const quantity = getRequiredQuantity(
+                  line,
+                  scale,
+                  filledCanCount,
+                  equivalentGallons,
+                  densityLbsPerGallon,
+                );
                 const display = getRequiredQuantityDisplay(
                   line,
                   quantity,
@@ -436,29 +472,25 @@ export function FormulaBatchScaler({
                       </span>
                     </td>
                     <td className="py-2 text-center">
-                      {line.quantity_basis === "percentage" ? (
-                        <span className="text-muted-foreground">—</span>
-                      ) : (
-                        <span
-                          title={`${formatInventoryAvailability(inventoryAvailability[line.item_id])} on hand`}
-                          aria-label={
-                            hasEnough
-                              ? "Inventory is sufficient"
-                              : "Inventory is insufficient"
-                          }
-                          className={
-                            hasEnough
-                              ? "inline-flex text-green-600"
-                              : "inline-flex text-red-600"
-                          }
-                        >
-                          {hasEnough ? (
-                            <Check className="size-4" />
-                          ) : (
-                            <X className="size-4" />
-                          )}
-                        </span>
-                      )}
+                      <span
+                        title={`${formatInventoryAvailability(inventoryAvailability[line.item_id])} on hand`}
+                        aria-label={
+                          hasEnough
+                            ? "Inventory is sufficient"
+                            : "Inventory is insufficient"
+                        }
+                        className={
+                          hasEnough
+                            ? "inline-flex text-green-600"
+                            : "inline-flex text-red-600"
+                        }
+                      >
+                        {hasEnough ? (
+                          <Check className="size-4" />
+                        ) : (
+                          <X className="size-4" />
+                        )}
+                      </span>
                     </td>
                   </tr>
                 );
@@ -524,9 +556,22 @@ function getRequiredQuantity(
   line: FormulaLine,
   scale: number,
   filledCanCount: number | null,
+  equivalentGallons: number | null,
+  densityLbsPerGallon: number,
 ) {
+  // Match Quantum batching sheets:
+  // target weight (lbs) = (ingredient % / 100) × batch gallons × density (lbs/gal)
   if (line.quantity_basis === "percentage") {
-    return Number(line.quantity);
+    if (
+      equivalentGallons === null ||
+      equivalentGallons <= 0 ||
+      densityLbsPerGallon <= 0
+    ) {
+      return 0;
+    }
+    return (
+      (Number(line.quantity) / 100) * equivalentGallons * densityLbsPerGallon
+    );
   }
 
   if (line.quantity_basis !== "per_can" || filledCanCount === null) {
@@ -553,9 +598,13 @@ function getRequiredQuantityDisplay(
   quantity: number,
   preferredUnit: RequiredQtyUnit,
 ): { quantity: number; unit: string } {
-  // Percentage and non-mass packaging lines keep their stored unit.
+  // Percentage lines are computed as lbs (sheet Target Weight), then converted.
   if (line.quantity_basis === "percentage") {
-    return { quantity, unit: line.unit_of_measure };
+    const converted = convertQuantity(quantity, "lbs", preferredUnit);
+    return {
+      quantity: converted ?? quantity,
+      unit: preferredUnit,
+    };
   }
 
   const converted = convertQuantity(
