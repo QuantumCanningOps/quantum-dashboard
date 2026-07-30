@@ -22,9 +22,13 @@ import type { NewItemResult } from "../../receiving/actions";
 const FLUID_OUNCES_PER_GALLON = 128;
 const CAN_SIZE_OUNCES = 12;
 const CANS_PER_TRAY = 24;
+const GRAMS_PER_KG = 1000;
+const GRAMS_PER_LB = 453.59237;
 const batchUnits = ["gallons", "cases", "cans"] as const;
+const requiredQtyUnits = ["g", "kg", "lbs"] as const;
 
 type BatchUnit = (typeof batchUnits)[number];
+type RequiredQtyUnit = (typeof requiredQtyUnits)[number];
 
 export type FormulaLine = {
   id: string;
@@ -79,6 +83,8 @@ export function FormulaBatchScaler({
   const [batchAmount, setBatchAmount] = useState(baseQuantity);
   const [batchUnit, setBatchUnit] = useState<BatchUnit>("gallons");
   const [bufferPercent, setBufferPercent] = useState(0);
+  const [requiredQtyUnit, setRequiredQtyUnit] =
+    useState<RequiredQtyUnit>("lbs");
 
   const [isEditing, setIsEditing] = useState(false);
   const [currentLines, setCurrentLines] = useState(lines);
@@ -363,18 +369,41 @@ export function FormulaBatchScaler({
                 <th className="pb-2 text-left font-medium">Type</th>
                 <th className="pb-2 text-left font-medium">Line</th>
                 <th className="pb-2 text-right font-medium">Basis</th>
-                <th className="pb-2 text-right font-medium">Required Qty</th>
+                <th className="pb-2 text-right font-medium">
+                  <div className="flex flex-col items-end gap-1.5">
+                    <span>Required Qty</span>
+                    <div className="flex rounded-md border p-0.5">
+                      {requiredQtyUnits.map((unit) => (
+                        <Button
+                          key={unit}
+                          type="button"
+                          variant={unit === requiredQtyUnit ? "default" : "ghost"}
+                          size="sm"
+                          className="h-6 px-2 text-xs"
+                          onClick={() => setRequiredQtyUnit(unit)}
+                        >
+                          {unit}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                </th>
                 <th className="pb-2 text-center font-medium">On Hand</th>
               </tr>
             </thead>
             <tbody>
               {currentLines.map((line) => {
                 const quantity = getRequiredQuantity(line, scale, filledCanCount);
+                const display = getRequiredQuantityDisplay(
+                  line,
+                  quantity,
+                  requiredQtyUnit,
+                );
                 const availableQuantity = getAvailableQuantity(
                   inventoryAvailability[line.item_id],
-                  line.unit_of_measure,
+                  display.unit,
                 );
-                const hasEnough = availableQuantity >= quantity;
+                const hasEnough = availableQuantity >= display.quantity;
                 const itemName = line.items?.name ?? "Unnamed item";
 
                 return (
@@ -401,9 +430,9 @@ export function FormulaBatchScaler({
                       {formatBasis(line, baseQuantity, baseUnitOfMeasure)}
                     </td>
                     <td className="py-2 text-right tabular-nums font-medium">
-                      {formatRequiredQuantity(line, quantity)}{" "}
+                      {formatRequiredQuantity(line, display.quantity)}{" "}
                       <span className="text-muted-foreground font-normal">
-                        {line.unit_of_measure}
+                        {display.unit}
                       </span>
                     </td>
                     <td className="py-2 text-center">
@@ -519,6 +548,28 @@ function formatRequiredQuantity(line: FormulaLine, value: number) {
   return formatQuantity(value);
 }
 
+function getRequiredQuantityDisplay(
+  line: FormulaLine,
+  quantity: number,
+  preferredUnit: RequiredQtyUnit,
+): { quantity: number; unit: string } {
+  // Percentage and non-mass packaging lines keep their stored unit.
+  if (line.quantity_basis === "percentage") {
+    return { quantity, unit: line.unit_of_measure };
+  }
+
+  const converted = convertQuantity(
+    quantity,
+    line.unit_of_measure,
+    preferredUnit,
+  );
+  if (converted === null) {
+    return { quantity, unit: line.unit_of_measure };
+  }
+
+  return { quantity: converted, unit: preferredUnit };
+}
+
 function formatBasis(
   line: FormulaLine,
   baseQuantity: number,
@@ -561,6 +612,12 @@ function getAvailableQuantity(
   }, 0);
 }
 
+type WeightUnit = "g" | "kg" | "lbs";
+
+function isWeightUnit(unit: string): unit is WeightUnit {
+  return unit === "g" || unit === "kg" || unit === "lbs";
+}
+
 function convertQuantity(
   quantity: number,
   fromUnit: string,
@@ -573,23 +630,60 @@ function convertQuantity(
     return quantity;
   }
 
-  if (normalizedFromUnit === "kg" && normalizedToUnit === "lbs") {
-    return quantity * 2.2046226218;
+  if (!isWeightUnit(normalizedFromUnit) || !isWeightUnit(normalizedToUnit)) {
+    return null;
   }
 
-  if (normalizedFromUnit === "lbs" && normalizedToUnit === "kg") {
-    return quantity / 2.2046226218;
-  }
+  return fromGramsUnit(toGrams(quantity, normalizedFromUnit), normalizedToUnit);
+}
 
-  return null;
+function toGrams(quantity: number, unit: WeightUnit): number {
+  switch (unit) {
+    case "g":
+      return quantity;
+    case "kg":
+      return quantity * GRAMS_PER_KG;
+    case "lbs":
+      return quantity * GRAMS_PER_LB;
+    default: {
+      const _exhaustive: never = unit;
+      return _exhaustive;
+    }
+  }
+}
+
+function fromGramsUnit(grams: number, unit: WeightUnit): number {
+  switch (unit) {
+    case "g":
+      return grams;
+    case "kg":
+      return grams / GRAMS_PER_KG;
+    case "lbs":
+      return grams / GRAMS_PER_LB;
+    default: {
+      const _exhaustive: never = unit;
+      return _exhaustive;
+    }
+  }
 }
 
 function normalizeUnit(unit: string) {
-  const normalized = unit.toLowerCase();
+  const normalized = unit.toLowerCase().trim();
+  if (
+    normalized === "g" ||
+    normalized === "gram" ||
+    normalized === "grams"
+  ) {
+    return "g";
+  }
   if (normalized === "lb" || normalized === "pound" || normalized === "pounds") {
     return "lbs";
   }
-  if (normalized === "kilogram" || normalized === "kilograms") {
+  if (
+    normalized === "kg" ||
+    normalized === "kilogram" ||
+    normalized === "kilograms"
+  ) {
     return "kg";
   }
   return normalized;
