@@ -90,10 +90,10 @@ async function FormulaDetail({ params }: FormulaPageProps) {
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
         <Link
-          href="/dashboard/clients"
+          href={`/dashboard/clients/${formula.client_id}`}
           className="text-sm text-muted-foreground hover:text-foreground hover:underline"
         >
-          Back to clients
+          ← {client?.name ?? "Clients"}
         </Link>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-bold">

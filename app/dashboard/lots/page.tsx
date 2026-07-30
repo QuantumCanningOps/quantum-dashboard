@@ -4,35 +4,105 @@ import { Badge } from "@/components/ui/badge";
 import { Suspense } from "react";
 import Link from "next/link";
 
-export default function LotsPage() {
+type LotsPageProps = {
+  searchParams?: Promise<{
+    clientId?: string;
+  }>;
+};
+
+type ClientOption = { id: string; name: string; code: string };
+
+export default function LotsPage({ searchParams }: LotsPageProps) {
   return (
     <Suspense fallback={<LotsFallback />}>
-      <LotsTable />
+      <LotsTable searchParams={searchParams} />
     </Suspense>
   );
 }
 
-async function LotsTable() {
+async function LotsTable({ searchParams }: LotsPageProps) {
   const supabase = await createClient();
+  const params = (await searchParams) ?? {};
+  const clientId = params.clientId ?? "";
 
-  const { data: lots } = await supabase
+  let lotsQuery = supabase
     .from("lots")
     .select(
       `id, lot_number, status, received_at, expiration_date, po_number, notes,
        items(name, item_type, unit_of_measure),
        clients(name, code),
        suppliers(name),
-       documents!lot_id(id, document_type)`
+       documents!lot_id(id, document_type)`,
     )
     .order("received_at", { ascending: false });
 
+  if (clientId) lotsQuery = lotsQuery.eq("client_id", clientId);
+
+  const [{ data: lots }, { data: clients }] = await Promise.all([
+    lotsQuery,
+    supabase.from("clients").select("id, name, code").order("name"),
+  ]);
+
+  const selectedClient = ((clients ?? []) as ClientOption[]).find(
+    (c) => c.id === clientId,
+  );
+
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-bold">Lots</h1>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Lots</h1>
+          {selectedClient && (
+            <p className="mt-1 text-sm text-muted-foreground">
+              Filtered to{" "}
+              <Link
+                href={`/dashboard/clients/${selectedClient.id}`}
+                className="font-medium text-foreground hover:underline"
+              >
+                {selectedClient.name}
+              </Link>
+            </p>
+          )}
+        </div>
+        <form method="GET" className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-xs text-muted-foreground">Client</span>
+            <select
+              name="clientId"
+              defaultValue={clientId}
+              className="h-9 min-w-[12rem] rounded-md border border-input bg-background px-3 text-sm shadow-sm"
+            >
+              <option value="">All clients</option>
+              {((clients ?? []) as ClientOption[]).map((client) => (
+                <option key={client.id} value={client.id}>
+                  {client.name}
+                  {client.code ? ` (${client.code})` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="submit"
+            className="h-9 rounded-md border bg-background px-3 text-sm hover:bg-muted"
+          >
+            Filter
+          </button>
+          {clientId && (
+            <Link
+              href="/dashboard/lots"
+              className="flex h-9 items-center px-2 text-sm text-muted-foreground hover:text-foreground"
+            >
+              Clear
+            </Link>
+          )}
+        </form>
+      </div>
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
-            All Lots ({lots?.length ?? 0})
+            {selectedClient
+              ? `${selectedClient.name} Lots (${lots?.length ?? 0})`
+              : `All Lots (${lots?.length ?? 0})`}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -62,12 +132,21 @@ async function LotsTable() {
                     name: string;
                     code: string;
                   } | null;
-                  const supplier = lot.suppliers as unknown as { name: string } | null;
-                  const docs = (lot.documents as unknown as { id: string; document_type: string }[]) ?? [];
+                  const supplier = lot.suppliers as unknown as {
+                    name: string;
+                  } | null;
+                  const docs =
+                    (lot.documents as unknown as {
+                      id: string;
+                      document_type: string;
+                    }[]) ?? [];
                   const coa = docs.find((d) => d.document_type === "coa");
 
                   return (
-                    <tr key={lot.id} className="border-b last:border-0 hover:bg-muted/30">
+                    <tr
+                      key={lot.id}
+                      className="border-b last:border-0 hover:bg-muted/30"
+                    >
                       <td className="py-2 pr-4 font-mono text-xs whitespace-nowrap">
                         <Link
                           href={`/dashboard/lots/${lot.id}`}
@@ -126,6 +205,16 @@ async function LotsTable() {
                     </tr>
                   );
                 })}
+                {(lots ?? []).length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={9}
+                      className="py-8 text-center text-sm text-muted-foreground"
+                    >
+                      No lots for this selection.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

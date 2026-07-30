@@ -125,7 +125,7 @@ async function DashboardOverview() {
                     className="flex items-center justify-between text-sm"
                   >
                     <Link
-                      href="/dashboard/clients"
+                      href={`/dashboard/clients/${client.id}`}
                       className="font-medium hover:underline"
                     >
                       {client.name}
