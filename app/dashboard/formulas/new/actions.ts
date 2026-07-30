@@ -44,35 +44,32 @@ export type ExtractedFormulaData = {
 const DEFAULT_SHEET_DENSITY_LBS_PER_GALLON = 8.4;
 
 /**
- * Sheets often display rounded % (87.88%) while Target Weight uses higher
- * precision. Prefer back-calculating % from target lbs when available:
- * pct = targetWeightLbs / (batchGallons × densityLbsPerGallon) × 100
+ * Sheets print rounded % (87.88%) but Target Weight/Volume is authoritative
+ * (11073.65 lbs). When target weights exist, store them as per_batch lbs at
+ * the sheet batch size so Required Qty can scale exactly.
+ *
+ * Fallback: if only % is present, keep percentage basis (density converts later).
  */
-function refineExtractedPercentages(
-  data: ExtractedFormulaData
-): ExtractedFormulaData {
-  const batchGallons = data.baseQuantity;
+function refineExtractedLines(data: ExtractedFormulaData): ExtractedFormulaData {
   const density =
     data.densityLbsPerGallon != null && data.densityLbsPerGallon > 0
       ? data.densityLbsPerGallon
       : DEFAULT_SHEET_DENSITY_LBS_PER_GALLON;
 
-  if (batchGallons == null || batchGallons <= 0 || !data.lines?.length) {
+  if (!data.lines?.length) {
     return { ...data, densityLbsPerGallon: data.densityLbsPerGallon ?? density };
   }
 
-  const batchWeightLbs = batchGallons * density;
   const lines = data.lines.map((line) => {
     const targetLbs = line.targetWeightLbs;
     if (targetLbs == null || !Number.isFinite(targetLbs) || targetLbs <= 0) {
       return line;
     }
-    const precisePct = (targetLbs / batchWeightLbs) * 100;
     return {
       ...line,
-      quantity: Math.round(precisePct * 1e6) / 1e6,
-      unitOfMeasure: "%",
-      quantityBasis: "percentage" as const,
+      quantity: targetLbs,
+      unitOfMeasure: "lbs",
+      quantityBasis: "per_batch" as const,
     };
   });
 
@@ -205,7 +202,7 @@ Rules:
 
     try {
       const parsed = JSON.parse(match[0]) as ExtractedFormulaData;
-      return { ok: true, data: refineExtractedPercentages(parsed) };
+      return { ok: true, data: refineExtractedLines(parsed) };
     } catch {
       return {
         ok: false,

@@ -101,6 +101,7 @@ export function FormulaBatchScaler({
   const hasPercentageLines = currentLines.some(
     (line) => line.quantity_basis === "percentage",
   );
+  const hasWaterLine = currentLines.some(isWaterIngredient);
   const [lineDrafts, setLineDrafts] = useState<LineDraft[]>([]);
   const [extraItems, setExtraItems] = useState<ItemOption[]>([]);
   const allItems = [
@@ -332,36 +333,40 @@ export function FormulaBatchScaler({
               </div>
             </div>
           </div>
-          {hasPercentageLines && (
+          {(hasPercentageLines || hasWaterLine) && (
             <div className="grid gap-2 sm:grid-cols-2">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="density-lbs-per-gal">Density (lbs/gal)</Label>
-                <Input
-                  id="density-lbs-per-gal"
-                  type="number"
-                  min="0"
-                  step="0.001"
-                  value={densityLbsPerGallon}
-                  onChange={(event) =>
-                    setDensityLbsPerGallon(Math.max(0, Number(event.target.value)))
-                  }
-                  className="w-32"
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="water-lbs-per-gal">Water (lbs/gal)</Label>
-                <Input
-                  id="water-lbs-per-gal"
-                  type="number"
-                  min="0"
-                  step="0.001"
-                  value={waterLbsPerGallon}
-                  onChange={(event) =>
-                    setWaterLbsPerGallon(Math.max(0, Number(event.target.value)))
-                  }
-                  className="w-32"
-                />
-              </div>
+              {hasPercentageLines && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="density-lbs-per-gal">Density (lbs/gal)</Label>
+                  <Input
+                    id="density-lbs-per-gal"
+                    type="number"
+                    min="0"
+                    step="0.001"
+                    value={densityLbsPerGallon}
+                    onChange={(event) =>
+                      setDensityLbsPerGallon(Math.max(0, Number(event.target.value)))
+                    }
+                    className="w-32"
+                  />
+                </div>
+              )}
+              {hasWaterLine && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="water-lbs-per-gal">Water (lbs/gal)</Label>
+                  <Input
+                    id="water-lbs-per-gal"
+                    type="number"
+                    min="0"
+                    step="0.001"
+                    value={waterLbsPerGallon}
+                    onChange={(event) =>
+                      setWaterLbsPerGallon(Math.max(0, Number(event.target.value)))
+                    }
+                    className="w-32"
+                  />
+                </div>
+              )}
             </div>
           )}
           <div className="flex flex-wrap gap-2">
@@ -470,11 +475,15 @@ export function FormulaBatchScaler({
                 );
                 const hasEnough = availableQuantity >= display.quantity;
                 const itemName = line.items?.name ?? "Unnamed item";
+                const quantityLbs =
+                  line.quantity_basis === "percentage"
+                    ? (percentageQtyLbs[line.id] ?? 0)
+                    : convertQuantity(quantity, line.unit_of_measure, "lbs");
                 const waterGallons =
-                  line.quantity_basis === "percentage" &&
                   isWaterIngredient(line) &&
-                  waterLbsPerGallon > 0
-                    ? (percentageQtyLbs[line.id] ?? 0) / waterLbsPerGallon
+                  waterLbsPerGallon > 0 &&
+                  quantityLbs != null
+                    ? quantityLbs / waterLbsPerGallon
                     : null;
 
                 return (
@@ -595,7 +604,7 @@ function getUnitAmountFromGallons(gallons: number, batchUnit: BatchUnit) {
   return Math.ceil(cans / CANS_PER_TRAY);
 }
 
-function isWaterIngredient(line: FormulaLine) {
+function isWaterIngredient(line: Pick<FormulaLine, "items">) {
   return line.items?.name.toLowerCase().includes("water") ?? false;
 }
 

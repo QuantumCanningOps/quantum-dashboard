@@ -222,14 +222,30 @@ export function CreateFormulaForm({
     quantityBasis: QuantityBasis;
     itemDescription: string;
   } | null {
+    const lineType: LineType =
+      raw.lineType === "packaging" ? "packaging" : "ingredient";
+
+    // Prefer sheet Target Weight/Volume (authoritative) over printed %.
+    const targetLbs =
+      raw.targetWeightLbs != null && Number.isFinite(Number(raw.targetWeightLbs))
+        ? Number(raw.targetWeightLbs)
+        : null;
+    if (targetLbs != null && targetLbs > 0) {
+      return {
+        lineType,
+        quantity: String(targetLbs),
+        unitOfMeasure: "lbs",
+        quantityBasis: "per_batch",
+        itemDescription: (raw.itemDescription ?? "").trim(),
+      };
+    }
+
     const quantity =
       raw.quantity != null && Number.isFinite(Number(raw.quantity))
         ? Number(raw.quantity)
         : null;
     if (quantity == null || quantity <= 0) return null;
 
-    const lineType: LineType =
-      raw.lineType === "packaging" ? "packaging" : "ingredient";
     const quantityBasis: QuantityBasis =
       raw.quantityBasis === "per_can" ||
       raw.quantityBasis === "percentage" ||
