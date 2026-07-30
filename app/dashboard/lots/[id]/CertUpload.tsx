@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createDocumentRecord } from "../../documents/actions";
+import { randomId } from "@/lib/utils";
 
 export function CertUpload({
   lotId,
@@ -25,7 +26,7 @@ export function CertUpload({
 
     try {
       const supabase = createClient();
-      const uuid = crypto.randomUUID();
+      const uuid = randomId();
       const path = `${clientId}/coa/${uuid}/${file.name}`;
 
       const { error: uploadError } = await supabase.storage

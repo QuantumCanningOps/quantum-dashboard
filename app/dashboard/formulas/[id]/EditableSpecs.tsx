@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Pencil } from "lucide-react";
+import { randomId } from "@/lib/utils";
 import { updateFormulaSpecs } from "./actions";
 
 export type FormulaSpec = {
@@ -42,7 +43,7 @@ function toDraft(spec: FormulaSpec): SpecDraft {
 
 function newSpecDraft(): SpecDraft {
   return {
-    key: crypto.randomUUID(),
+    key: randomId(),
     name: "",
     minValue: "",
     targetValue: "",

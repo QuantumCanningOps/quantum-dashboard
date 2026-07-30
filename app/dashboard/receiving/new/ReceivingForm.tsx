@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { randomId } from "@/lib/utils";
 import {
   extractFromBol,
   submitReceiving,
@@ -72,7 +73,7 @@ function today() {
 
 function newLotDraft(): LotDraft {
   return {
-    key: crypto.randomUUID(),
+    key: randomId(),
     itemId: "",
     lotNumber: "",
     quantity: "",
@@ -582,7 +583,7 @@ export function ReceivingForm({
         !lots[0].itemId;
 
       const newLots: LotDraft[] = data.lots.map((l) => ({
-        key: crypto.randomUUID(),
+        key: randomId(),
         itemId: "",
         lotNumber: l.lotNumber ?? "",
         quantity: l.quantity != null ? String(l.quantity) : "",
@@ -662,7 +663,7 @@ export function ReceivingForm({
       let bolStoragePath: string | null = null;
       let bolFileName: string | null = null;
       if (bolFile) {
-        const bolId = crypto.randomUUID();
+        const bolId = randomId();
         const path = `${clientId}/bol/${bolId}/${bolFile.name}`;
         const { error } = await supabase.storage
           .from("documents")
@@ -677,7 +678,7 @@ export function ReceivingForm({
           let coaStoragePath: string | null = null;
           let coaFileName: string | null = null;
           if (lot.coaFile) {
-            const coaId = crypto.randomUUID();
+            const coaId = randomId();
             const path = `${clientId}/coa/${coaId}/${lot.coaFile.name}`;
             const { error } = await supabase.storage
               .from("documents")

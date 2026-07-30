@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Pencil } from "lucide-react";
+import { randomId } from "@/lib/utils";
 import {
   saveClientContacts,
   type ContactRow,
@@ -36,7 +37,7 @@ function toDraft(contact: ContactRow): ContactDraft {
 
 function newContactDraft(): ContactDraft {
   return {
-    key: crypto.randomUUID(),
+    key: randomId(),
     name: "",
     email: "",
     phone: "",

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { randomId } from "@/lib/utils";
 import { type NewItemResult } from "../../receiving/actions";
 import {
   SEL,
@@ -301,7 +302,7 @@ export function CreateFormulaForm({
   // ── Artwork file management ──────────────────────────────────────────────
 
   function addArtworkFile(file: File) {
-    setArtworkFiles((prev) => [...prev, { key: crypto.randomUUID(), file }]);
+    setArtworkFiles((prev) => [...prev, { key: randomId(), file }]);
   }
 
   function removeArtworkFile(key: string) {
@@ -339,7 +340,7 @@ export function CreateFormulaForm({
 
       let paLetter: { fileName: string; storagePath: string } | null = null;
       if (paLetterFile) {
-        const uuid = crypto.randomUUID();
+        const uuid = randomId();
         const path = `${clientId}/pa_letter/${uuid}/${paLetterFile.name}`;
         const { error } = await supabase.storage.from("documents").upload(path, paLetterFile);
         if (error) throw new Error(error.message);
@@ -348,7 +349,7 @@ export function CreateFormulaForm({
 
       const artworkUploads = await Promise.all(
         artworkFiles.map(async ({ file }) => {
-          const uuid = crypto.randomUUID();
+          const uuid = randomId();
           const path = `${clientId}/artwork/${uuid}/${file.name}`;
           const { error } = await supabase.storage.from("documents").upload(path, file);
           if (error) throw new Error(error.message);
