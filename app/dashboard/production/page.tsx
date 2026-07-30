@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { Suspense } from "react";
 import { ProductionView } from "./ProductionView";
+import { SyncToGoogleButton } from "./SyncToGoogleButton";
 import type { BatchScheduleRow } from "./ProductionOrdersTable";
 
 type PendingOrder = {
@@ -53,6 +54,10 @@ async function BatchSchedule({ searchParams }: ProductionPageProps) {
     : "";
   const q = params.q?.trim() ?? "";
 
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
   let query = supabase
     .from("batches")
     .select(
@@ -63,7 +68,12 @@ async function BatchSchedule({ searchParams }: ProductionPageProps) {
 
   if (status) query = query.eq("status", status);
 
-  const [{ data: batches }, { data: clients }, { data: pendingRows }] = await Promise.all([
+  const [
+    { data: batches },
+    { data: clients },
+    { data: pendingRows },
+    { data: googleConnection },
+  ] = await Promise.all([
     query,
     supabase.from("clients").select("id, name").order("name"),
     supabase
@@ -71,7 +81,16 @@ async function BatchSchedule({ searchParams }: ProductionPageProps) {
       .select("id, order_number, client_id, ordered_quantity, unit_of_measure, created_at, clients(name, code), skus(code, name)")
       .eq("status", "pending")
       .order("created_at", { ascending: false }),
+    user
+      ? supabase
+          .from("google_connections_public")
+          .select("status")
+          .eq("user_id", user.id)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
+
+  const googleConnected = googleConnection?.status === "active";
 
   let allBatches = (batches ?? []) as unknown as BatchScheduleRow[];
   let pendingOrders = (pendingRows ?? []) as unknown as PendingOrder[];
@@ -102,11 +121,14 @@ async function BatchSchedule({ searchParams }: ProductionPageProps) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-bold">Batch Schedule</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Current and historical production schedule.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Batch Schedule</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Current and historical production schedule.
+          </p>
+        </div>
+        <SyncToGoogleButton googleConnected={googleConnected} />
       </div>
 
       <div className="grid grid-cols-4 gap-4">
