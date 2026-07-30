@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense, type ReactNode } from "react";
+import { EditableContacts } from "./EditableContacts";
 
 type DetailPageProps = {
   params: Promise<{ id: string }>;
@@ -234,47 +235,7 @@ async function ClientDetail({ params }: DetailPageProps) {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Contacts</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(contacts ?? []).length === 0 ? (
-              <p className="text-sm text-muted-foreground">No contacts</p>
-            ) : (
-              <ul className="flex flex-col gap-3">
-                {(contacts ?? []).map((contact) => (
-                  <li key={contact.id} className="flex flex-col gap-0.5 text-sm">
-                    <div className="flex items-center gap-2">
-                      {contact.primary_contact && (
-                        <span className="text-yellow-500" title="Primary">
-                          ★
-                        </span>
-                      )}
-                      <span className="font-medium">{contact.name}</span>
-                      {contact.role && (
-                        <span className="text-muted-foreground">
-                          {contact.role}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                      {contact.email && (
-                        <a
-                          href={`mailto:${contact.email}`}
-                          className="hover:underline"
-                        >
-                          {contact.email}
-                        </a>
-                      )}
-                      {contact.phone && <span>{contact.phone}</span>}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+        <EditableContacts clientId={id} contacts={contacts ?? []} />
       </div>
 
       <Card>
