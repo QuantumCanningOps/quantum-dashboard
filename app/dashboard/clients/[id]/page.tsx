@@ -193,7 +193,7 @@ async function ClientDetail({ params }: DetailPageProps) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard label="SKUs" value={(skus ?? []).length} />
         <StatCard label="Open Orders" value={openOrderCount} />
         <StatCard label="Total Lots" value={totalLots} />
@@ -685,7 +685,7 @@ function ClientDetailFallback() {
   return (
     <div className="flex flex-col gap-6">
       <div className="h-8 w-56 animate-pulse rounded bg-muted" />
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-5">
         {Array.from({ length: 5 }).map((_, i) => (
           <Card key={i}>
             <CardHeader className="pb-2">
