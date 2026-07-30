@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { GoogleDrivePickerButton } from "@/components/GoogleDrivePickerButton";
 import { matchItemByDescription } from "@/lib/match-item";
 import { randomId } from "@/lib/utils";
 import { type NewItemResult } from "../../receiving/actions";
@@ -677,22 +678,31 @@ export function CreateFormulaForm({
               )}
             </div>
           ) : (
-            <Label
-              htmlFor="formula-sheet-file"
-              className="cursor-pointer flex items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
-            >
-              <span>Upload formula sheet (PDF or PNG) — optional</span>
-              <input
-                id="formula-sheet-file"
-                type="file"
-                className="sr-only"
-                accept=".pdf,image/png,image/jpeg"
-                onChange={(e) => {
-                  setFormulaSheetFile(e.target.files?.[0] ?? null);
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+              <Label
+                htmlFor="formula-sheet-file"
+                className="cursor-pointer flex flex-1 items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
+              >
+                <span>Upload formula sheet (PDF or PNG) — optional</span>
+                <input
+                  id="formula-sheet-file"
+                  type="file"
+                  className="sr-only"
+                  accept=".pdf,image/png,image/jpeg"
+                  onChange={(e) => {
+                    setFormulaSheetFile(e.target.files?.[0] ?? null);
+                    setExtractNote(null);
+                  }}
+                />
+              </Label>
+              <GoogleDrivePickerButton
+                disabled={extracting}
+                onFile={(file) => {
+                  setFormulaSheetFile(file);
                   setExtractNote(null);
                 }}
               />
-            </Label>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -904,19 +914,26 @@ export function CreateFormulaForm({
                 </button>
               </div>
             ) : (
-              <Label
-                htmlFor="pa-letter-file"
-                className="cursor-pointer flex items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
-              >
-                <span>Upload PA Letter (PDF or PNG) — optional</span>
-                <input
-                  id="pa-letter-file"
-                  type="file"
-                  className="sr-only"
-                  accept=".pdf,image/png,image/jpeg"
-                  onChange={(e) => setPaLetterFile(e.target.files?.[0] ?? null)}
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                <Label
+                  htmlFor="pa-letter-file"
+                  className="cursor-pointer flex flex-1 items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
+                >
+                  <span>Upload PA Letter (PDF or PNG) — optional</span>
+                  <input
+                    id="pa-letter-file"
+                    type="file"
+                    className="sr-only"
+                    accept=".pdf,image/png,image/jpeg"
+                    onChange={(e) => setPaLetterFile(e.target.files?.[0] ?? null)}
+                  />
+                </Label>
+                <GoogleDrivePickerButton
+                  onFile={(file) => {
+                    setPaLetterFile(file);
+                  }}
                 />
-              </Label>
+              </div>
             )}
           </div>
 
@@ -934,23 +951,30 @@ export function CreateFormulaForm({
                 </button>
               </div>
             ))}
-            <Label
-              htmlFor="artwork-file"
-              className="cursor-pointer flex items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
-            >
-              <span>+ Add artwork file (PDF or PNG) — optional</span>
-              <input
-                id="artwork-file"
-                type="file"
-                className="sr-only"
-                accept=".pdf,image/png,image/jpeg"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) addArtworkFile(file);
-                  e.target.value = "";
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+              <Label
+                htmlFor="artwork-file"
+                className="cursor-pointer flex flex-1 items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
+              >
+                <span>+ Add artwork file (PDF or PNG) — optional</span>
+                <input
+                  id="artwork-file"
+                  type="file"
+                  className="sr-only"
+                  accept=".pdf,image/png,image/jpeg"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) addArtworkFile(file);
+                    e.target.value = "";
+                  }}
+                />
+              </Label>
+              <GoogleDrivePickerButton
+                onFile={(file) => {
+                  addArtworkFile(file);
                 }}
               />
-            </Label>
+            </div>
           </div>
         </CardContent>
       </Card>

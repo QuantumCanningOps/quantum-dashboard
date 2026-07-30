@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createDocumentRecord } from "@/app/dashboard/documents/actions";
+import { GoogleDrivePickerButton } from "@/components/GoogleDrivePickerButton";
 import { randomId } from "@/lib/utils";
 
 export type FormulaDocument = {
@@ -132,6 +133,13 @@ function FormulaDocUpload({
           accept=".pdf,image/png,image/jpeg"
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
         />
+        <GoogleDrivePickerButton
+          disabled={uploading}
+          onFile={(selected) => {
+            setFile(selected);
+            setError(null);
+          }}
+        />
         <Button
           type="button"
           size="sm"
@@ -144,6 +152,11 @@ function FormulaDocUpload({
           {uploading ? "Uploading…" : "Upload"}
         </Button>
       </div>
+      {file && (
+        <p className="text-xs text-muted-foreground font-mono truncate">
+          Selected: {file.name}
+        </p>
+      )}
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
   );
