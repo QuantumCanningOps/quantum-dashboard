@@ -192,12 +192,20 @@ export async function syncProductionCalendar(
     ),
   ];
   if (missingBatchIds.length > 0) {
-    const { data: extraBatches } = await admin
+    const { data: extraBatches, error: extraError } = await admin
       .from("batches")
       .select(
         "id, batch_number, status, batching_date, canning_date, planned_quantity, actual_quantity, unit_of_measure, tanks(name), production_orders(id, order_number, clients(name, code), skus(code, name))",
       )
       .in("id", missingBatchIds);
+
+    if (extraError) {
+      result.errors.push(
+        `Failed to load mapped batches for cleanup: ${extraError.message}`,
+      );
+      return result;
+    }
+
     for (const row of (extraBatches ?? []) as unknown as SyncBatch[]) {
       batchById.set(row.id, row);
     }
