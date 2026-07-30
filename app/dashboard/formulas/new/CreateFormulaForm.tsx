@@ -261,115 +261,117 @@ export function CreateFormulaForm({
 
   async function handleExtractFromSheet() {
     if (!formulaSheetFile) return;
-    setExtracting(true);
-    setExtractNote(null);
-
-    const fd = new FormData();
-    fd.append("file", formulaSheetFile);
-    const result = await extractFromFormulaPdf(fd);
-
-    if (!result.ok) {
-      setExtractNote(result.message);
-      setExtracting(false);
+    if (!clientId) {
+      setExtractNote("Select a client first so extracted ingredients can be matched correctly.");
       return;
     }
 
-    const { data } = result;
-    const notes: string[] = [];
+    setExtracting(true);
+    setExtractNote(null);
 
-    if (data.formulaNumber) {
-      setFormulaNumber(data.formulaNumber);
-      notes.push(`formula # ${data.formulaNumber}`);
-    }
-    if (data.name) {
-      setName(data.name);
-      notes.push(`name "${data.name}"`);
-    }
-    if (data.baseQuantity != null && Number(data.baseQuantity) > 0) {
-      setBaseQuantity(String(data.baseQuantity));
-      notes.push(`batch ${data.baseQuantity}`);
-    }
-    if (data.baseUnitOfMeasure) {
-      setBaseUnitOfMeasure(data.baseUnitOfMeasure);
-    }
-    if (data.batchingInstructions) {
-      setBatchingInstructions(data.batchingInstructions);
-      notes.push("batching instructions");
-    }
+    try {
+      const fd = new FormData();
+      fd.append("file", formulaSheetFile);
+      const result = await extractFromFormulaPdf(fd);
 
-    const validLines = (data.lines ?? [])
-      .map(normalizeExtractedLine)
-      .filter((l): l is NonNullable<typeof l> => l != null);
+      if (!result.ok) {
+        setExtractNote(result.message);
+        return;
+      }
 
-    if (validLines.length > 0) {
-      const isDefaultEmpty =
-        lines.length === 1 &&
-        !lines[0].itemId &&
-        !lines[0].quantity &&
-        !lines[0].unitOfMeasure;
+      const { data } = result;
+      const notes: string[] = [];
 
-      const newLines: LineDraft[] = validLines.map((l) => {
-        const itemId = l.itemDescription
-          ? matchItem(l.itemDescription, l.lineType)
-          : "";
-        const matchedItem = itemId
-          ? allItems.find((i) => i.id === itemId)
-          : null;
-        return {
-          key: randomId(),
-          lineType: l.lineType,
-          itemId,
-          quantity: l.quantity,
-          unitOfMeasure:
-            l.quantityBasis === "percentage"
-              ? "%"
-              : l.unitOfMeasure || matchedItem?.unit_of_measure || "",
-          quantityBasis: l.quantityBasis,
-        };
-      });
+      if (data.formulaNumber) {
+        setFormulaNumber(data.formulaNumber);
+        notes.push(`formula # ${data.formulaNumber}`);
+      }
+      if (data.name) {
+        setName(data.name);
+        notes.push(`name "${data.name}"`);
+      }
+      if (data.baseQuantity != null && Number(data.baseQuantity) > 0) {
+        setBaseQuantity(String(data.baseQuantity));
+        notes.push(`batch ${data.baseQuantity}`);
+      }
+      if (data.baseUnitOfMeasure) {
+        setBaseUnitOfMeasure(data.baseUnitOfMeasure);
+      }
+      if (data.batchingInstructions) {
+        setBatchingInstructions(data.batchingInstructions);
+        notes.push("batching instructions");
+      }
 
-      const descMap: Record<string, string> = {};
-      validLines.forEach((l, i) => {
-        if (l.itemDescription && newLines[i]) {
-          descMap[newLines[i].key] = l.itemDescription;
-        }
-      });
-      setExtractedDescriptions(descMap);
-      setLines(isDefaultEmpty ? newLines : [...lines, ...newLines]);
+      const validLines = (data.lines ?? [])
+        .map(normalizeExtractedLine)
+        .filter((l): l is NonNullable<typeof l> => l != null);
 
-      const matchedCount = newLines.filter((l) => l.itemId).length;
-      const unmatched = newLines.length - matchedCount;
-      notes.push(
-        `${newLines.length} line${newLines.length !== 1 ? "s" : ""} extracted` +
-          (unmatched > 0
-            ? ` (${matchedCount} item${matchedCount !== 1 ? "s" : ""} matched, ${unmatched} need selection)`
-            : " (all items matched)")
+      if (validLines.length > 0) {
+        // Replace existing lines — re-extract should refresh, not duplicate.
+        const newLines: LineDraft[] = validLines.map((l) => {
+          const itemId = l.itemDescription
+            ? matchItem(l.itemDescription, l.lineType)
+            : "";
+          const matchedItem = itemId
+            ? allItems.find((i) => i.id === itemId)
+            : null;
+          return {
+            key: randomId(),
+            lineType: l.lineType,
+            itemId,
+            quantity: l.quantity,
+            unitOfMeasure:
+              l.quantityBasis === "percentage"
+                ? "%"
+                : l.unitOfMeasure || matchedItem?.unit_of_measure || "",
+            quantityBasis: l.quantityBasis,
+          };
+        });
+
+        const descMap: Record<string, string> = {};
+        validLines.forEach((l, i) => {
+          if (l.itemDescription && newLines[i]) {
+            descMap[newLines[i].key] = l.itemDescription;
+          }
+        });
+        setExtractedDescriptions(descMap);
+        setLines(newLines);
+
+        const matchedCount = newLines.filter((l) => l.itemId).length;
+        const unmatched = newLines.length - matchedCount;
+        notes.push(
+          `${newLines.length} line${newLines.length !== 1 ? "s" : ""} extracted` +
+            (unmatched > 0
+              ? ` (${matchedCount} item${matchedCount !== 1 ? "s" : ""} matched, ${unmatched} need selection)`
+              : " (all items matched)")
+        );
+      }
+
+      const specs: FormulaSpecInput[] = (data.specs ?? [])
+        .filter((s) => !!s.name?.trim())
+        .map((s) => ({
+          name: s.name!.trim(),
+          targetValue: s.targetValue ?? null,
+          minValue: s.minValue ?? null,
+          maxValue: s.maxValue ?? null,
+          unit: s.unit ?? null,
+          notes: s.notes ?? null,
+        }));
+      setPendingSpecs(specs);
+      if (specs.length > 0) {
+        notes.push(
+          `${specs.length} spec${specs.length !== 1 ? "s" : ""} will be saved on create`
+        );
+      }
+
+      setExtractNote(
+        notes.length > 0
+          ? `Extracted: ${notes.join("; ")}.`
+          : "Sheet scanned but no data found — fill in fields manually."
       );
+    } finally {
+      setExtracting(false);
     }
-
-    const specs: FormulaSpecInput[] = (data.specs ?? [])
-      .filter((s) => !!s.name?.trim())
-      .map((s) => ({
-        name: s.name!.trim(),
-        targetValue: s.targetValue ?? null,
-        minValue: s.minValue ?? null,
-        maxValue: s.maxValue ?? null,
-        unit: s.unit ?? null,
-        notes: s.notes ?? null,
-      }));
-    setPendingSpecs(specs);
-    if (specs.length > 0) {
-      notes.push(
-        `${specs.length} spec${specs.length !== 1 ? "s" : ""} will be saved on create`
-      );
-    }
-
-    setExtractNote(
-      notes.length > 0
-        ? `Extracted: ${notes.join("; ")}.`
-        : "Sheet scanned but no data found — fill in fields manually."
-    );
-    setExtracting(false);
   }
 
   function handleClientChange(value: string) {
@@ -597,8 +599,9 @@ export function CreateFormulaForm({
       }
 
       if (postCreateWarnings.length > 0) {
-        // Formula exists — still navigate; surface warnings briefly via query is overkill.
-        console.warn("[createFormula] post-create:", postCreateWarnings.join("; "));
+        setSubmitError(
+          `Formula created, but ${postCreateWarnings.join("; ")}. Opening formula…`
+        );
       }
 
       router.push(`/dashboard/formulas/${result.id}`);
@@ -632,7 +635,8 @@ export function CreateFormulaForm({
         <CardContent className="flex flex-col gap-3">
           <p className="text-sm text-muted-foreground">
             Upload a batching data sheet (PDF or image) to prefill formula identity,
-            lines, batching instructions, and specs. Review and match items before saving.
+            lines, batching instructions, and specs. Select a client first, then extract
+            and review item matches before saving.
           </p>
           {formulaSheetFile ? (
             <div className="flex flex-col gap-2">
@@ -644,7 +648,8 @@ export function CreateFormulaForm({
                   onClick={() => {
                     void handleExtractFromSheet();
                   }}
-                  disabled={extracting}
+                  disabled={extracting || !clientId}
+                  title={!clientId ? "Select a client first" : undefined}
                 >
                   {extracting ? "Extracting…" : "Extract from sheet"}
                 </Button>

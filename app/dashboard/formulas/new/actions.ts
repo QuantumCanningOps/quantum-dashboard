@@ -97,7 +97,9 @@ Rules:
 - Normalize units to lowercase common forms (gallons, lbs, oz, %).
 - Omit any field you cannot clearly identify.`;
 
-    const isPdf = file.type === "application/pdf";
+    const isPdf =
+      file.type === "application/pdf" ||
+      file.name.toLowerCase().endsWith(".pdf");
 
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -122,7 +124,7 @@ Rules:
                   type: "image" as const,
                   source: {
                     type: "base64" as const,
-                    media_type: file.type as
+                    media_type: (file.type || "image/png") as
                       | "image/png"
                       | "image/jpeg"
                       | "image/gif"
@@ -148,7 +150,16 @@ Rules:
       };
     }
 
-    return { ok: true, data: JSON.parse(match[0]) as ExtractedFormulaData };
+    try {
+      return { ok: true, data: JSON.parse(match[0]) as ExtractedFormulaData };
+    } catch {
+      return {
+        ok: false,
+        reason: "no_data",
+        message:
+          "Document was read but the extracted response was not valid JSON — fill in the fields manually.",
+      };
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[extractFromFormulaPdf]", msg);
