@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createDocumentRecord } from "@/app/dashboard/documents/actions";
+import { randomId } from "@/lib/utils";
 
 type Props =
   | { docType: "coa"; clientId: string; lotId: string; lotNumber: string }
@@ -47,7 +48,7 @@ export function UploadMissingDocButton(props: Props) {
 
     try {
       const supabase = createClient();
-      const uuid = crypto.randomUUID();
+      const uuid = randomId();
       const path = `${props.clientId}/${props.docType}/${uuid}/${file.name}`;
 
       const { error: uploadError } = await supabase.storage

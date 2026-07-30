@@ -2,15 +2,23 @@ import { createClient } from "@/lib/supabase/server";
 import { Suspense } from "react";
 import { CreateFormulaForm } from "./CreateFormulaForm";
 
-export default function NewFormulaPage() {
+type NewFormulaPageProps = {
+  searchParams?: Promise<{
+    clientId?: string;
+    skuId?: string;
+  }>;
+};
+
+export default function NewFormulaPage({ searchParams }: NewFormulaPageProps) {
   return (
     <Suspense fallback={<div className="h-64 w-full animate-pulse rounded-lg bg-muted" />}>
-      <NewFormulaContent />
+      <NewFormulaContent searchParams={searchParams} />
     </Suspense>
   );
 }
 
-async function NewFormulaContent() {
+async function NewFormulaContent({ searchParams }: NewFormulaPageProps) {
+  const params = (await searchParams) ?? {};
   const supabase = await createClient();
 
   const [{ data: clients }, { data: items }, { data: skus }] = await Promise.all([
@@ -27,11 +35,24 @@ async function NewFormulaContent() {
       .order("code"),
   ]);
 
+  const defaultClientId = params.clientId ?? "";
+  const defaultSkuId = params.skuId ?? "";
+  const selectedSku = (skus ?? []).find((sku) => sku.id === defaultSkuId);
+  const resolvedClientId =
+    defaultClientId || selectedSku?.client_id || "";
+  const resolvedSkuId =
+    selectedSku && selectedSku.client_id === resolvedClientId
+      ? selectedSku.id
+      : "";
+
   return (
     <CreateFormulaForm
       clients={clients ?? []}
       items={items ?? []}
       skus={skus ?? []}
+      defaultClientId={resolvedClientId}
+      defaultSkuId={resolvedSkuId}
+      defaultName={selectedSku?.name ?? ""}
     />
   );
 }

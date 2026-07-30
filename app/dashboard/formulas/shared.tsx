@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { randomId } from "@/lib/utils";
 import { createItem, type NewItemResult } from "../receiving/actions";
 import { createSkuRecord, type NewSkuResult } from "./new/actions";
 
@@ -72,7 +73,7 @@ export const itemTypeForLine: Record<LineType, ItemType> = {
 
 export function newLineDraft(lineType: LineType = "ingredient"): LineDraft {
   return {
-    key: crypto.randomUUID(),
+    key: randomId(),
     lineType,
     itemId: "",
     quantity: "",

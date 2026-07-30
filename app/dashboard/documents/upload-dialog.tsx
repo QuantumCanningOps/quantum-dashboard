@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createDocumentRecord } from "./actions";
+import { randomId } from "@/lib/utils";
 
 const DOCUMENT_TYPES = [
   { value: "coa", label: "Certificate of Analysis" },
@@ -127,7 +128,7 @@ export function UploadDialog({
 
     try {
       const supabase = createClient();
-      const uuid = crypto.randomUUID();
+      const uuid = randomId();
       const path = `${clientId}/${docType}/${uuid}/${file.name}`;
 
       const { error: uploadError } = await supabase.storage

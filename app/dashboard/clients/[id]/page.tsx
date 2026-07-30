@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense, type ReactNode } from "react";
+import { EditableContacts } from "./EditableContacts";
 
 type DetailPageProps = {
   params: Promise<{ id: string }>;
@@ -181,27 +182,19 @@ async function ClientDetail({ params }: DetailPageProps) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <Link
-          href="/dashboard/clients"
-          className="text-sm text-muted-foreground hover:text-foreground hover:underline"
-        >
-          ← Clients
-        </Link>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold">{client.name}</h1>
-          <Badge className="bg-slate-100 text-slate-600 border-slate-200 font-mono">
-            {client.code}
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-2xl font-bold">{client.name}</h2>
+        <Badge className="bg-slate-100 text-slate-600 border-slate-200 font-mono">
+          {client.code}
+        </Badge>
+        {!client.active && (
+          <Badge className="bg-red-100 text-red-700 border-red-200">
+            Inactive
           </Badge>
-          {!client.active && (
-            <Badge className="bg-red-100 text-red-700 border-red-200">
-              Inactive
-            </Badge>
-          )}
-        </div>
+        )}
       </div>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard label="SKUs" value={(skus ?? []).length} />
         <StatCard label="Open Orders" value={openOrderCount} />
         <StatCard label="Total Lots" value={totalLots} />
@@ -242,47 +235,7 @@ async function ClientDetail({ params }: DetailPageProps) {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Contacts</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(contacts ?? []).length === 0 ? (
-              <p className="text-sm text-muted-foreground">No contacts</p>
-            ) : (
-              <ul className="flex flex-col gap-3">
-                {(contacts ?? []).map((contact) => (
-                  <li key={contact.id} className="flex flex-col gap-0.5 text-sm">
-                    <div className="flex items-center gap-2">
-                      {contact.primary_contact && (
-                        <span className="text-yellow-500" title="Primary">
-                          ★
-                        </span>
-                      )}
-                      <span className="font-medium">{contact.name}</span>
-                      {contact.role && (
-                        <span className="text-muted-foreground">
-                          {contact.role}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                      {contact.email && (
-                        <a
-                          href={`mailto:${contact.email}`}
-                          className="hover:underline"
-                        >
-                          {contact.email}
-                        </a>
-                      )}
-                      {contact.phone && <span>{contact.phone}</span>}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+        <EditableContacts clientId={id} contacts={contacts ?? []} />
       </div>
 
       <Card>
@@ -319,22 +272,40 @@ async function ClientDetail({ params }: DetailPageProps) {
                           {sku.shelf_life_days}d shelf life
                         </span>
                       )}
-                      {formula ? (
-                        <Link
-                          href={`/dashboard/formulas/${sku.formula_id}`}
-                          className="ml-auto text-xs text-muted-foreground hover:underline"
-                        >
-                          {formula.formula_number ?? "Formula"} v
-                          {formula.version}
-                          {formula.status === "authorized" && (
-                            <span className="ml-1 text-green-600">✓</span>
-                          )}
-                        </Link>
-                      ) : (
-                        <span className="ml-auto text-xs text-muted-foreground">
-                          No formula
-                        </span>
-                      )}
+                      <div className="ml-auto flex items-center gap-3">
+                        {formula ? (
+                          <>
+                            <Link
+                              href={`/dashboard/formulas/${sku.formula_id}`}
+                              className="text-xs text-muted-foreground hover:underline"
+                            >
+                              {formula.formula_number ?? "Formula"} v
+                              {formula.version}
+                              {formula.status === "authorized" && (
+                                <span className="ml-1 text-green-600">✓</span>
+                              )}
+                            </Link>
+                            <Link
+                              href={`/dashboard/formulas/${sku.formula_id}`}
+                              className="text-xs font-medium text-foreground hover:underline"
+                            >
+                              Edit formula
+                            </Link>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs text-muted-foreground">
+                              No formula
+                            </span>
+                            <Link
+                              href={`/dashboard/formulas/new?clientId=${id}&skuId=${sku.id}`}
+                              className="text-xs font-medium text-foreground hover:underline"
+                            >
+                              Add formula
+                            </Link>
+                          </>
+                        )}
+                      </div>
                     </div>
                     {skuOrders.length > 0 && (
                       <ul className="ml-4 flex flex-col gap-0.5">
@@ -692,11 +663,8 @@ function AvailableQty({ row }: { row: InventoryRow }) {
 function ClientDetailFallback() {
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3">
-        <div className="h-4 w-24 animate-pulse rounded bg-muted" />
-        <div className="h-8 w-56 animate-pulse rounded bg-muted" />
-      </div>
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+      <div className="h-8 w-56 animate-pulse rounded bg-muted" />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-5">
         {Array.from({ length: 5 }).map((_, i) => (
           <Card key={i}>
             <CardHeader className="pb-2">
