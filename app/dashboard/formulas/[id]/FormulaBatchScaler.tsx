@@ -26,6 +26,8 @@ const GRAMS_PER_KG = 1000;
 const GRAMS_PER_LB = 453.59237;
 /** Default product density used on Quantum batching sheets (Target Weight/Volume). */
 const DEFAULT_DENSITY_LBS_PER_GALLON = 8.4;
+/** Water density reference on sheets — used for water volume, not Target Weight. */
+const DEFAULT_WATER_LBS_PER_GALLON = 8.345;
 const batchUnits = ["gallons", "cases", "cans"] as const;
 const requiredQtyUnits = ["g", "kg", "lbs"] as const;
 
@@ -89,6 +91,9 @@ export function FormulaBatchScaler({
     useState<RequiredQtyUnit>("lbs");
   const [densityLbsPerGallon, setDensityLbsPerGallon] = useState(
     DEFAULT_DENSITY_LBS_PER_GALLON,
+  );
+  const [waterLbsPerGallon, setWaterLbsPerGallon] = useState(
+    DEFAULT_WATER_LBS_PER_GALLON,
   );
 
   const [isEditing, setIsEditing] = useState(false);
@@ -209,6 +214,15 @@ export function FormulaBatchScaler({
     filledCanCount === null ? null : Math.ceil(filledCanCount);
   const requiredTrays =
     requiredCans === null ? null : Math.ceil(requiredCans / CANS_PER_TRAY);
+  const percentageQtyLbs = useMemo(
+    () =>
+      getPercentageRequiredQuantitiesLbs(
+        currentLines,
+        equivalentGallons,
+        densityLbsPerGallon,
+      ),
+    [currentLines, equivalentGallons, densityLbsPerGallon],
+  );
 
   return (
     <Card>
@@ -249,8 +263,10 @@ export function FormulaBatchScaler({
           )}
           {hasPercentageLines && (
             <p className="mt-1 text-sm text-muted-foreground">
-              % lines → weight using density {formatQuantity(densityLbsPerGallon)}{" "}
-              lbs/gal
+              % → Target Weight = pct × batch gal × product density{" "}
+              {formatQuantity(densityLbsPerGallon)} lbs/gal. Water{" "}
+              {formatQuantity(waterLbsPerGallon)} lbs/gal converts water weight
+              to gallons only.
             </p>
           )}
         </div>
@@ -317,19 +333,35 @@ export function FormulaBatchScaler({
             </div>
           </div>
           {hasPercentageLines && (
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="density-lbs-per-gal">Density (lbs/gal)</Label>
-              <Input
-                id="density-lbs-per-gal"
-                type="number"
-                min="0"
-                step="0.001"
-                value={densityLbsPerGallon}
-                onChange={(event) =>
-                  setDensityLbsPerGallon(Math.max(0, Number(event.target.value)))
-                }
-                className="w-32"
-              />
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="density-lbs-per-gal">Density (lbs/gal)</Label>
+                <Input
+                  id="density-lbs-per-gal"
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value={densityLbsPerGallon}
+                  onChange={(event) =>
+                    setDensityLbsPerGallon(Math.max(0, Number(event.target.value)))
+                  }
+                  className="w-32"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="water-lbs-per-gal">Water (lbs/gal)</Label>
+                <Input
+                  id="water-lbs-per-gal"
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value={waterLbsPerGallon}
+                  onChange={(event) =>
+                    setWaterLbsPerGallon(Math.max(0, Number(event.target.value)))
+                  }
+                  className="w-32"
+                />
+              </div>
             </div>
           )}
           <div className="flex flex-wrap gap-2">
@@ -423,13 +455,10 @@ export function FormulaBatchScaler({
             </thead>
             <tbody>
               {currentLines.map((line) => {
-                const quantity = getRequiredQuantity(
-                  line,
-                  scale,
-                  filledCanCount,
-                  equivalentGallons,
-                  densityLbsPerGallon,
-                );
+                const quantity =
+                  line.quantity_basis === "percentage"
+                    ? (percentageQtyLbs[line.id] ?? 0)
+                    : getRequiredQuantity(line, scale, filledCanCount);
                 const display = getRequiredQuantityDisplay(
                   line,
                   quantity,
@@ -441,6 +470,12 @@ export function FormulaBatchScaler({
                 );
                 const hasEnough = availableQuantity >= display.quantity;
                 const itemName = line.items?.name ?? "Unnamed item";
+                const waterGallons =
+                  line.quantity_basis === "percentage" &&
+                  isWaterIngredient(line) &&
+                  waterLbsPerGallon > 0
+                    ? (percentageQtyLbs[line.id] ?? 0) / waterLbsPerGallon
+                    : null;
 
                 return (
                   <tr key={line.id} className="border-b last:border-0">
@@ -466,10 +501,18 @@ export function FormulaBatchScaler({
                       {formatBasis(line, baseQuantity, baseUnitOfMeasure)}
                     </td>
                     <td className="py-2 text-right tabular-nums font-medium">
-                      {formatRequiredQuantity(line, display.quantity)}{" "}
-                      <span className="text-muted-foreground font-normal">
-                        {display.unit}
-                      </span>
+                      <div>
+                        {formatRequiredQuantity(line, display.quantity)}{" "}
+                        <span className="text-muted-foreground font-normal">
+                          {display.unit}
+                        </span>
+                      </div>
+                      {waterGallons !== null && (
+                        <div className="text-xs text-muted-foreground font-normal">
+                          ≈ {formatQuantity(waterGallons)} gal @{" "}
+                          {formatQuantity(waterLbsPerGallon)} lbs/gal
+                        </div>
+                      )}
                     </td>
                     <td className="py-2 text-center">
                       <span
@@ -552,26 +595,45 @@ function getUnitAmountFromGallons(gallons: number, batchUnit: BatchUnit) {
   return Math.ceil(cans / CANS_PER_TRAY);
 }
 
+function isWaterIngredient(line: FormulaLine) {
+  return line.items?.name.toLowerCase().includes("water") ?? false;
+}
+
+/**
+ * Match Quantum batching sheets:
+ * target lbs = (pct / 100) × batch gal × product density (lbs/gal).
+ * Water (lbs/gal) on the sheet is only for converting water weight ↔ volume.
+ */
+function getPercentageRequiredQuantitiesLbs(
+  lines: FormulaLine[],
+  equivalentGallons: number | null,
+  densityLbsPerGallon: number,
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  if (
+    equivalentGallons === null ||
+    equivalentGallons <= 0 ||
+    densityLbsPerGallon <= 0
+  ) {
+    return result;
+  }
+
+  const batchWeightLbs = equivalentGallons * densityLbsPerGallon;
+  for (const line of lines) {
+    if (line.quantity_basis !== "percentage") continue;
+    result[line.id] = (Number(line.quantity) / 100) * batchWeightLbs;
+  }
+
+  return result;
+}
+
 function getRequiredQuantity(
   line: FormulaLine,
   scale: number,
   filledCanCount: number | null,
-  equivalentGallons: number | null,
-  densityLbsPerGallon: number,
 ) {
-  // Match Quantum batching sheets:
-  // target weight (lbs) = (ingredient % / 100) × batch gallons × density (lbs/gal)
   if (line.quantity_basis === "percentage") {
-    if (
-      equivalentGallons === null ||
-      equivalentGallons <= 0 ||
-      densityLbsPerGallon <= 0
-    ) {
-      return 0;
-    }
-    return (
-      (Number(line.quantity) / 100) * equivalentGallons * densityLbsPerGallon
-    );
+    return 0;
   }
 
   if (line.quantity_basis !== "per_can" || filledCanCount === null) {

@@ -14,6 +14,8 @@ export type ExtractedFormulaLine = {
   quantity?: number;
   unitOfMeasure?: string;
   quantityBasis?: "per_batch" | "per_can" | "percentage";
+  /** Target Weight/Volume from the sheet, in lbs, when present. */
+  targetWeightLbs?: number;
 };
 
 export type ExtractedFormulaSpec = {
@@ -31,9 +33,55 @@ export type ExtractedFormulaData = {
   baseQuantity?: number;
   baseUnitOfMeasure?: string;
   batchingInstructions?: string;
+  /** Product density from the sheet (Target Weight uses this, typically 8.4). */
+  densityLbsPerGallon?: number;
+  /** Water density reference from the sheet (volume conversion; typically 8.345). */
+  waterLbsPerGallon?: number;
   lines?: ExtractedFormulaLine[];
   specs?: ExtractedFormulaSpec[];
 };
+
+const DEFAULT_SHEET_DENSITY_LBS_PER_GALLON = 8.4;
+
+/**
+ * Sheets often display rounded % (87.88%) while Target Weight uses higher
+ * precision. Prefer back-calculating % from target lbs when available:
+ * pct = targetWeightLbs / (batchGallons × densityLbsPerGallon) × 100
+ */
+function refineExtractedPercentages(
+  data: ExtractedFormulaData
+): ExtractedFormulaData {
+  const batchGallons = data.baseQuantity;
+  const density =
+    data.densityLbsPerGallon != null && data.densityLbsPerGallon > 0
+      ? data.densityLbsPerGallon
+      : DEFAULT_SHEET_DENSITY_LBS_PER_GALLON;
+
+  if (batchGallons == null || batchGallons <= 0 || !data.lines?.length) {
+    return { ...data, densityLbsPerGallon: data.densityLbsPerGallon ?? density };
+  }
+
+  const batchWeightLbs = batchGallons * density;
+  const lines = data.lines.map((line) => {
+    const targetLbs = line.targetWeightLbs;
+    if (targetLbs == null || !Number.isFinite(targetLbs) || targetLbs <= 0) {
+      return line;
+    }
+    const precisePct = (targetLbs / batchWeightLbs) * 100;
+    return {
+      ...line,
+      quantity: Math.round(precisePct * 1e6) / 1e6,
+      unitOfMeasure: "%",
+      quantityBasis: "percentage" as const,
+    };
+  });
+
+  return {
+    ...data,
+    densityLbsPerGallon: density,
+    lines,
+  };
+}
 
 export type FormulaExtractionResult =
   | { ok: true; data: ExtractedFormulaData }
@@ -66,6 +114,8 @@ export async function extractFromFormulaPdf(
   "name": "product / formula name",
   "baseQuantity": 1500,
   "baseUnitOfMeasure": "gallons",
+  "densityLbsPerGallon": 8.4,
+  "waterLbsPerGallon": 8.345,
   "batchingInstructions": "full batching instructions text if present",
   "lines": [
     {
@@ -73,7 +123,8 @@ export async function extractFromFormulaPdf(
       "lineType": "ingredient",
       "quantity": 87.88,
       "unitOfMeasure": "%",
-      "quantityBasis": "percentage"
+      "quantityBasis": "percentage",
+      "targetWeightLbs": 11073.65
     }
   ],
   "specs": [
@@ -89,8 +140,10 @@ export async function extractFromFormulaPdf(
 }
 
 Rules:
-- Prefer percentage rows when the sheet lists ingredient %; set quantityBasis to "percentage", unitOfMeasure to "%", and quantity to the numeric percent (e.g. 87.88 from 87.88%).
-- If only weight/volume per batch is available, use quantityBasis "per_batch" with that quantity and its unit (e.g. lbs).
+- Prefer percentage rows when the sheet lists ingredient %; set quantityBasis to "percentage", unitOfMeasure to "%", and quantity to the numeric percent.
+- Also extract the Target Weight/Volume column into targetWeightLbs when present (even if a % is shown). Keep full precision from that column (e.g. 11073.65, 55.203).
+- Extract density (lbs/gal) into densityLbsPerGallon and Water (lbs/gal) into waterLbsPerGallon when shown. Target Weight uses product density, not water density.
+- If only weight/volume per batch is available (no %), use quantityBasis "per_batch" with that quantity and its unit (e.g. lbs).
 - Skip total/100% summary rows and blank rows.
 - lineType is usually "ingredient"; use "packaging" only for packaging materials.
 - Parse specs like "2.50-2.60" into minValue/maxValue, and "11.8+/-0.2" into targetValue 11.8 with min/max 11.6/12.0.
@@ -151,7 +204,8 @@ Rules:
     }
 
     try {
-      return { ok: true, data: JSON.parse(match[0]) as ExtractedFormulaData };
+      const parsed = JSON.parse(match[0]) as ExtractedFormulaData;
+      return { ok: true, data: refineExtractedPercentages(parsed) };
     } catch {
       return {
         ok: false,
