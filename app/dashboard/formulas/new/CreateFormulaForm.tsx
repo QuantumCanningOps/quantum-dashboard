@@ -15,14 +15,20 @@ import {
   LineRow,
   NewSkuForm,
   newLineDraft,
+  itemTypeForLine,
   type ItemOption,
   type SkuOption,
   type LineType,
   type LineDraft,
+  type QuantityBasis,
 } from "../shared";
+import { createDocumentRecord } from "../../documents/actions";
+import { updateFormulaSpecs, type FormulaSpecInput } from "../[id]/actions";
 import {
   createClientRecord,
   createFormula,
+  extractFromFormulaPdf,
+  type ExtractedFormulaLine,
   type NewClientResult,
   type NewSkuResult,
 } from "./actions";
@@ -180,6 +186,15 @@ export function CreateFormulaForm({
   // Formula lines
   const [lines, setLines] = useState<LineDraft[]>([newLineDraft("ingredient")]);
   const [loadingFormulaLines, setLoadingFormulaLines] = useState(false);
+  const [extractedDescriptions, setExtractedDescriptions] = useState<
+    Record<string, string>
+  >({});
+  const [pendingSpecs, setPendingSpecs] = useState<FormulaSpecInput[]>([]);
+
+  // Formula sheet import
+  const [formulaSheetFile, setFormulaSheetFile] = useState<File | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractNote, setExtractNote] = useState<string | null>(null);
 
   // Documents
   const [paLetterFile, setPaLetterFile] = useState<File | null>(null);
@@ -188,6 +203,174 @@ export function CreateFormulaForm({
   // Submit state
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  function matchItem(description: string, lineType: LineType): string {
+    const lower = description.toLowerCase().trim();
+    if (!lower) return "";
+    const wanted = itemTypeForLine[lineType];
+    const candidates = allItems.filter(
+      (i) =>
+        i.item_type === wanted &&
+        (!clientId || !i.client_id || i.client_id === clientId)
+    );
+    const exact = candidates.find((i) => i.name.toLowerCase() === lower);
+    if (exact) return exact.id;
+    return (
+      candidates.find(
+        (i) =>
+          i.name.toLowerCase().includes(lower) ||
+          lower.includes(i.name.toLowerCase())
+      )?.id ?? ""
+    );
+  }
+
+  function normalizeExtractedLine(raw: ExtractedFormulaLine): {
+    lineType: LineType;
+    quantity: string;
+    unitOfMeasure: string;
+    quantityBasis: QuantityBasis;
+    itemDescription: string;
+  } | null {
+    const quantity =
+      raw.quantity != null && Number.isFinite(Number(raw.quantity))
+        ? Number(raw.quantity)
+        : null;
+    if (quantity == null || quantity <= 0) return null;
+
+    const lineType: LineType =
+      raw.lineType === "packaging" ? "packaging" : "ingredient";
+    const quantityBasis: QuantityBasis =
+      raw.quantityBasis === "per_can" ||
+      raw.quantityBasis === "percentage" ||
+      raw.quantityBasis === "per_batch"
+        ? raw.quantityBasis
+        : "per_batch";
+    const unitOfMeasure =
+      quantityBasis === "percentage"
+        ? "%"
+        : (raw.unitOfMeasure ?? "").trim() || "";
+
+    return {
+      lineType,
+      quantity: String(quantity),
+      unitOfMeasure,
+      quantityBasis,
+      itemDescription: (raw.itemDescription ?? "").trim(),
+    };
+  }
+
+  async function handleExtractFromSheet() {
+    if (!formulaSheetFile) return;
+    setExtracting(true);
+    setExtractNote(null);
+
+    const fd = new FormData();
+    fd.append("file", formulaSheetFile);
+    const result = await extractFromFormulaPdf(fd);
+
+    if (!result.ok) {
+      setExtractNote(result.message);
+      setExtracting(false);
+      return;
+    }
+
+    const { data } = result;
+    const notes: string[] = [];
+
+    if (data.formulaNumber) {
+      setFormulaNumber(data.formulaNumber);
+      notes.push(`formula # ${data.formulaNumber}`);
+    }
+    if (data.name) {
+      setName(data.name);
+      notes.push(`name "${data.name}"`);
+    }
+    if (data.baseQuantity != null && Number(data.baseQuantity) > 0) {
+      setBaseQuantity(String(data.baseQuantity));
+      notes.push(`batch ${data.baseQuantity}`);
+    }
+    if (data.baseUnitOfMeasure) {
+      setBaseUnitOfMeasure(data.baseUnitOfMeasure);
+    }
+    if (data.batchingInstructions) {
+      setBatchingInstructions(data.batchingInstructions);
+      notes.push("batching instructions");
+    }
+
+    const validLines = (data.lines ?? [])
+      .map(normalizeExtractedLine)
+      .filter((l): l is NonNullable<typeof l> => l != null);
+
+    if (validLines.length > 0) {
+      const isDefaultEmpty =
+        lines.length === 1 &&
+        !lines[0].itemId &&
+        !lines[0].quantity &&
+        !lines[0].unitOfMeasure;
+
+      const newLines: LineDraft[] = validLines.map((l) => {
+        const itemId = l.itemDescription
+          ? matchItem(l.itemDescription, l.lineType)
+          : "";
+        const matchedItem = itemId
+          ? allItems.find((i) => i.id === itemId)
+          : null;
+        return {
+          key: randomId(),
+          lineType: l.lineType,
+          itemId,
+          quantity: l.quantity,
+          unitOfMeasure:
+            l.quantityBasis === "percentage"
+              ? "%"
+              : l.unitOfMeasure || matchedItem?.unit_of_measure || "",
+          quantityBasis: l.quantityBasis,
+        };
+      });
+
+      const descMap: Record<string, string> = {};
+      validLines.forEach((l, i) => {
+        if (l.itemDescription && newLines[i]) {
+          descMap[newLines[i].key] = l.itemDescription;
+        }
+      });
+      setExtractedDescriptions(descMap);
+      setLines(isDefaultEmpty ? newLines : [...lines, ...newLines]);
+
+      const matchedCount = newLines.filter((l) => l.itemId).length;
+      const unmatched = newLines.length - matchedCount;
+      notes.push(
+        `${newLines.length} line${newLines.length !== 1 ? "s" : ""} extracted` +
+          (unmatched > 0
+            ? ` (${matchedCount} item${matchedCount !== 1 ? "s" : ""} matched, ${unmatched} need selection)`
+            : " (all items matched)")
+      );
+    }
+
+    const specs: FormulaSpecInput[] = (data.specs ?? [])
+      .filter((s) => !!s.name?.trim())
+      .map((s) => ({
+        name: s.name!.trim(),
+        targetValue: s.targetValue ?? null,
+        minValue: s.minValue ?? null,
+        maxValue: s.maxValue ?? null,
+        unit: s.unit ?? null,
+        notes: s.notes ?? null,
+      }));
+    setPendingSpecs(specs);
+    if (specs.length > 0) {
+      notes.push(
+        `${specs.length} spec${specs.length !== 1 ? "s" : ""} will be saved on create`
+      );
+    }
+
+    setExtractNote(
+      notes.length > 0
+        ? `Extracted: ${notes.join("; ")}.`
+        : "Sheet scanned but no data found — fill in fields manually."
+    );
+    setExtracting(false);
+  }
 
   function handleClientChange(value: string) {
     if (value === "__new__") {
@@ -382,6 +565,42 @@ export function CreateFormulaForm({
         return;
       }
 
+      const postCreateWarnings: string[] = [];
+
+      if (formulaSheetFile) {
+        try {
+          const uuid = randomId();
+          const path = `${clientId}/spec_sheet/${uuid}/${formulaSheetFile.name}`;
+          const { error } = await supabase.storage
+            .from("documents")
+            .upload(path, formulaSheetFile);
+          if (error) throw new Error(error.message);
+          await createDocumentRecord({
+            clientId,
+            documentType: "spec_sheet",
+            fileName: formulaSheetFile.name,
+            storagePath: path,
+            formulaId: result.id,
+          });
+        } catch (e) {
+          postCreateWarnings.push(
+            `sheet upload failed: ${e instanceof Error ? e.message : "unknown error"}`
+          );
+        }
+      }
+
+      if (pendingSpecs.length > 0) {
+        const specsResult = await updateFormulaSpecs(result.id, pendingSpecs);
+        if (!specsResult.success) {
+          postCreateWarnings.push(`specs failed to save: ${specsResult.error}`);
+        }
+      }
+
+      if (postCreateWarnings.length > 0) {
+        // Formula exists — still navigate; surface warnings briefly via query is overkill.
+        console.warn("[createFormula] post-create:", postCreateWarnings.join("; "));
+      }
+
       router.push(`/dashboard/formulas/${result.id}`);
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : "Upload failed");
@@ -404,6 +623,66 @@ export function CreateFormulaForm({
           Cancel
         </Button>
       </div>
+
+      {/* ── Import from formula sheet ────────────────────────────────── */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Import from Formula Sheet</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <p className="text-sm text-muted-foreground">
+            Upload a batching data sheet (PDF or image) to prefill formula identity,
+            lines, batching instructions, and specs. Review and match items before saving.
+          </p>
+          {formulaSheetFile ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                <span className="font-mono truncate flex-1">{formulaSheetFile.name}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void handleExtractFromSheet();
+                  }}
+                  disabled={extracting}
+                >
+                  {extracting ? "Extracting…" : "Extract from sheet"}
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFormulaSheetFile(null);
+                    setExtractNote(null);
+                  }}
+                  className="text-xs text-muted-foreground hover:text-destructive"
+                >
+                  Remove
+                </button>
+              </div>
+              {extractNote && (
+                <p className="text-xs text-muted-foreground">{extractNote}</p>
+              )}
+            </div>
+          ) : (
+            <Label
+              htmlFor="formula-sheet-file"
+              className="cursor-pointer flex items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
+            >
+              <span>Upload formula sheet (PDF or PNG) — optional</span>
+              <input
+                id="formula-sheet-file"
+                type="file"
+                className="sr-only"
+                accept=".pdf,image/png,image/jpeg"
+                onChange={(e) => {
+                  setFormulaSheetFile(e.target.files?.[0] ?? null);
+                  setExtractNote(null);
+                }}
+              />
+            </Label>
+          )}
+        </CardContent>
+      </Card>
 
       {/* ── Formula Identity ─────────────────────────────────────────── */}
       <Card>
@@ -577,6 +856,7 @@ export function CreateFormulaForm({
               onUpdate={updateLine}
               onRemove={removeLine}
               onItemCreated={handleItemCreated}
+              extractedDescription={extractedDescriptions[line.key]}
             />
           ))}
 

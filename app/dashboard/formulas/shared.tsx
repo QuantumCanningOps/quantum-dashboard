@@ -187,17 +187,21 @@ export function NewSkuForm({
 export function NewIngredientForm({
   clientId,
   defaultItemType,
+  defaultName = "",
+  defaultUnitOfMeasure = "",
   onCreated,
   onCancel,
 }: {
   clientId: string;
   defaultItemType: ItemType;
+  defaultName?: string;
+  defaultUnitOfMeasure?: string;
   onCreated: (item: NewItemResult) => void;
   onCancel: () => void;
 }) {
-  const [name, setName] = useState("");
+  const [name, setName] = useState(defaultName);
   const [itemType, setItemType] = useState<ItemType>(defaultItemType);
-  const [uom, setUom] = useState("");
+  const [uom, setUom] = useState(defaultUnitOfMeasure);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -297,6 +301,7 @@ export function LineRow({
   onUpdate,
   onRemove,
   onItemCreated,
+  extractedDescription,
 }: {
   line: LineDraft;
   index: number;
@@ -306,6 +311,7 @@ export function LineRow({
   onUpdate: (key: string, updates: Partial<LineDraft>) => void;
   onRemove: (key: string) => void;
   onItemCreated: (item: NewItemResult) => void;
+  extractedDescription?: string;
 }) {
   const [creatingItem, setCreatingItem] = useState(false);
 
@@ -372,6 +378,17 @@ export function LineRow({
         )}
       </div>
 
+      {extractedDescription && (
+        <div className="rounded bg-blue-50 px-3 py-1.5 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-200">
+          From sheet: <span className="font-medium">{extractedDescription}</span>
+          {!line.itemId && (
+            <span className="ml-1 text-blue-600/80 dark:text-blue-300/80">
+              — select or create matching item
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Row 1: line type + item */}
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-1.5">
@@ -412,6 +429,10 @@ export function LineRow({
         <NewIngredientForm
           clientId={clientId}
           defaultItemType={wantedItemType}
+          defaultName={extractedDescription ?? ""}
+          defaultUnitOfMeasure={
+            line.quantityBasis === "percentage" ? "lbs" : line.unitOfMeasure
+          }
           onCreated={handleNewItemCreated}
           onCancel={() => {
             setCreatingItem(false);
