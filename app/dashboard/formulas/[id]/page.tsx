@@ -7,6 +7,10 @@ import {
 import { EditableSku, type SkuRow } from "./EditableSku";
 import { EditableBatchingInstructions } from "./EditableBatchingInstructions";
 import { EditableSpecs, type FormulaSpec } from "./EditableSpecs";
+import {
+  FormulaDocuments,
+  type FormulaDocument,
+} from "./FormulaDocuments";
 import { ImportWarningBanner } from "./ImportWarningBanner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -51,6 +55,7 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
     { data: specs },
     { data: items },
     { data: clientSkus },
+    { data: documents },
   ] = await Promise.all([
     supabase
       .from("skus")
@@ -78,12 +83,19 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
       .select("id, client_id, code, name, shelf_life_days")
       .eq("client_id", formula.client_id)
       .order("code"),
+    supabase
+      .from("documents")
+      .select("id, document_type, file_name, uploaded_at, artwork_status")
+      .eq("formula_id", id)
+      .in("document_type", ["pa_letter", "artwork"])
+      .order("uploaded_at", { ascending: false }),
   ]);
 
   const client = formula.clients as unknown as { name: string; code: string } | null;
   const formulaLines = (lines ?? []) as unknown as FormulaLine[];
   const formulaSpecs = (specs ?? []) as FormulaSpec[];
   const linkedSkus = (skus ?? []) as SkuRow[];
+  const formulaDocuments = (documents ?? []) as FormulaDocument[];
   const inventoryAvailability = await getInventoryAvailability(
     supabase,
     formulaLines,
@@ -143,6 +155,12 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
       />
 
       <EditableSpecs formulaId={formula.id} specs={formulaSpecs} />
+
+      <FormulaDocuments
+        formulaId={formula.id}
+        clientId={formula.client_id}
+        documents={formulaDocuments}
+      />
     </div>
   );
 }

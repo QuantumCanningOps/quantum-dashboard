@@ -48,4 +48,11 @@ export async function createDocumentRecord(data: {
   }
 
   revalidatePath("/dashboard/documents");
+  revalidatePath("/dashboard/needs-attention");
+  if (data.formulaId) {
+    revalidatePath(`/dashboard/formulas/${data.formulaId}`);
+  }
+  if (data.lotId) {
+    revalidatePath(`/dashboard/lots/${data.lotId}`);
+  }
 }
