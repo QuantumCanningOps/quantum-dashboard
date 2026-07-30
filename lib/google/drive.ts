@@ -31,8 +31,47 @@ export async function listFiles(
     pageSize: opts?.pageSize ?? 20,
     q: opts?.q,
     fields: "files(id, name, mimeType, modifiedTime, webViewLink)",
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
   return res.data.files ?? [];
+}
+
+async function resolveDriveFileId(
+  drive: ReturnType<typeof driveClient>,
+  fileId: string,
+): Promise<{ id: string; name: string; mimeType: string }> {
+  const meta = await drive.files.get({
+    fileId,
+    fields: "id, name, mimeType, shortcutDetails(targetId, targetMimeType)",
+    supportsAllDrives: true,
+  });
+
+  const mimeType = meta.data.mimeType ?? "application/octet-stream";
+  if (
+    mimeType === "application/vnd.google-apps.shortcut" &&
+    meta.data.shortcutDetails?.targetId
+  ) {
+    const target = await drive.files.get({
+      fileId: meta.data.shortcutDetails.targetId,
+      fields: "id, name, mimeType",
+      supportsAllDrives: true,
+    });
+    return {
+      id: target.data.id ?? meta.data.shortcutDetails.targetId,
+      name: target.data.name ?? meta.data.name ?? "drive-file",
+      mimeType:
+        target.data.mimeType ??
+        meta.data.shortcutDetails.targetMimeType ??
+        "application/octet-stream",
+    };
+  }
+
+  return {
+    id: meta.data.id ?? fileId,
+    name: meta.data.name ?? "drive-file",
+    mimeType,
+  };
 }
 
 export async function downloadFile(
@@ -42,24 +81,26 @@ export async function downloadFile(
   const auth = await getGoogleClient(userId);
   const drive = driveClient(auth);
 
-  const meta = await drive.files.get({
-    fileId,
-    fields: "id, name, mimeType, size",
-    supportsAllDrives: true,
-  });
+  let resolved: { id: string; name: string; mimeType: string };
+  try {
+    resolved = await resolveDriveFileId(drive, fileId);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `${msg} If this file is in shared Drive, disconnect and reconnect Google in Settings so drive.readonly is granted.`,
+    );
+  }
 
-  const name = meta.data.name ?? "drive-file";
-  const sourceMime = meta.data.mimeType ?? "application/octet-stream";
-  const exportAs = GOOGLE_DOC_EXPORT_MIME[sourceMime];
+  const exportAs = GOOGLE_DOC_EXPORT_MIME[resolved.mimeType];
 
   if (exportAs) {
     const res = await drive.files.export(
-      { fileId, mimeType: exportAs.mimeType },
+      { fileId: resolved.id, mimeType: exportAs.mimeType },
       { responseType: "arraybuffer" },
     );
-    const exportName = name.toLowerCase().endsWith(exportAs.extension)
-      ? name
-      : `${name}${exportAs.extension}`;
+    const exportName = resolved.name.toLowerCase().endsWith(exportAs.extension)
+      ? resolved.name
+      : `${resolved.name}${exportAs.extension}`;
     return {
       name: exportName,
       mimeType: exportAs.mimeType,
@@ -68,13 +109,13 @@ export async function downloadFile(
   }
 
   const res = await drive.files.get(
-    { fileId, alt: "media", supportsAllDrives: true },
+    { fileId: resolved.id, alt: "media", supportsAllDrives: true },
     { responseType: "arraybuffer" },
   );
 
   return {
-    name,
-    mimeType: sourceMime,
+    name: resolved.name,
+    mimeType: resolved.mimeType,
     data: Buffer.from(res.data as ArrayBuffer),
   };
 }
@@ -105,6 +146,7 @@ export async function uploadFile(
       body: Readable.from(body),
     },
     fields: "id, name, mimeType, webViewLink",
+    supportsAllDrives: true,
   });
   return res.data;
 }

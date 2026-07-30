@@ -23,7 +23,10 @@ Connect Google is a **separate** OAuth flow from Supabase login. Users stay sign
 - `openid` `email` `profile`
 - `https://www.googleapis.com/auth/gmail.modify`
 - `https://www.googleapis.com/auth/drive.file`
+- `https://www.googleapis.com/auth/drive.readonly` (needed to download existing/shared Drive files picked in the UI)
 - `https://www.googleapis.com/auth/calendar`
+
+After changing scopes, users must **Disconnect** and **Connect Google** again in Settings so the new Drive permission is granted.
 
 These are sensitive/restricted scopes. Production use outside a small test user list requires Google OAuth verification.
 

@@ -18,7 +18,10 @@ declare global {
         PickerBuilder: new () => GooglePickerBuilder;
         ViewId: { DOCS: unknown; DOCS_IMAGES: unknown };
         Action: { PICKED: string; CANCEL: string };
-        Feature: { MULTISELECT_ENABLED: unknown };
+        Feature: {
+          MULTISELECT_ENABLED: unknown;
+          SUPPORT_DRIVES: unknown;
+        };
         DocsView: new (viewId?: unknown) => GoogleDocsView;
       };
     };
@@ -28,6 +31,7 @@ declare global {
 type GoogleDocsView = {
   setMimeTypes: (mimeTypes: string) => GoogleDocsView;
   setIncludeFolders: (include: boolean) => GoogleDocsView;
+  setEnableDrives?: (enable: boolean) => GoogleDocsView;
 };
 
 type GooglePickerBuilder = {
@@ -140,9 +144,11 @@ export function GoogleDrivePickerButton({
         const view = new pickerApi.DocsView()
           .setIncludeFolders(true)
           .setMimeTypes(mimeTypes);
+        view.setEnableDrives?.(true);
 
         const builder = new pickerApi.PickerBuilder()
           .addView(view)
+          .enableFeature(pickerApi.Feature.SUPPORT_DRIVES)
           .setOAuthToken(session.accessToken)
           .setDeveloperKey(session.developerKey)
           .setCallback((data) => {

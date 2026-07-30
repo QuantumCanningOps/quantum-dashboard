@@ -125,6 +125,12 @@ export async function importGoogleDriveFile(
     return { ok: false, reason: "api_error", message: "No Drive file selected." };
   }
 
+  const connection = await loadGoogleConnection(userId);
+  const scopes = connection?.scopes ?? [];
+  const hasDriveReadonly = scopes.some((scope) =>
+    scope.includes("drive.readonly"),
+  );
+
   try {
     const file = await downloadFile(userId, fileId.trim());
     return {
@@ -139,6 +145,14 @@ export async function importGoogleDriveFile(
     }
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[importGoogleDriveFile]", msg);
+    if (!hasDriveReadonly || /not found/i.test(msg)) {
+      return {
+        ok: false,
+        reason: "needs_reauth",
+        message:
+          "Drive could not read that file. Disconnect and reconnect Google in Settings to grant drive.readonly, then try again.",
+      };
+    }
     return { ok: false, reason: "api_error", message: `Drive download failed: ${msg}` };
   }
 }
