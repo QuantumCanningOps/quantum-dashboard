@@ -43,23 +43,23 @@ export async function saveGoogleConnection(params: {
 }): Promise<void> {
   const { userId, googleEmail, googleSub, scopes, tokens } = params;
 
-  if (!tokens.refresh_token) {
-    throw new Error(
-      "Google did not return a refresh_token. Disconnect and reconnect with consent.",
-    );
-  }
-
   const admin = createAdminClient();
-  const existing = await admin
+  const { data: existingRow, error: existingError } = await admin
     .from("google_connections")
     .select("token_ciphertext")
     .eq("user_id", userId)
     .maybeSingle();
 
+  if (existingError) {
+    throw new Error(
+      `Failed to load Google connection: ${existingError.message}`,
+    );
+  }
+
   let previous: GoogleTokenPayload | null = null;
-  if (existing.data?.token_ciphertext) {
+  if (existingRow?.token_ciphertext) {
     try {
-      previous = decryptTokens(existing.data.token_ciphertext);
+      previous = decryptTokens(existingRow.token_ciphertext);
     } catch {
       previous = null;
     }
@@ -72,7 +72,9 @@ export async function saveGoogleConnection(params: {
   };
 
   if (!payload.refresh_token) {
-    throw new Error("Missing Google refresh_token");
+    throw new Error(
+      "Google did not return a refresh_token. Disconnect and reconnect with consent.",
+    );
   }
 
   const { error } = await admin.from("google_connections").upsert(
@@ -111,13 +113,19 @@ export async function loadGoogleConnection(
 
 export async function markNeedsReauth(userId: string): Promise<void> {
   const admin = createAdminClient();
-  await admin
+  const { error } = await admin
     .from("google_connections")
     .update({
       status: "needs_reauth",
       updated_at: new Date().toISOString(),
     })
     .eq("user_id", userId);
+
+  if (error) {
+    throw new Error(
+      `Failed to mark Google connection needs_reauth: ${error.message}`,
+    );
+  }
 }
 
 export async function deleteGoogleConnection(userId: string): Promise<void> {
@@ -148,13 +156,19 @@ export async function persistRefreshedTokens(
   };
 
   const admin = createAdminClient();
-  await admin
+  const { error } = await admin
     .from("google_connections")
     .update({
       token_ciphertext: encryptTokens(payload),
       updated_at: new Date().toISOString(),
     })
     .eq("user_id", userId);
+
+  if (error) {
+    throw new Error(
+      `Failed to persist refreshed Google tokens: ${error.message}`,
+    );
+  }
 }
 
 export async function revokeGoogleToken(userId: string): Promise<void> {
