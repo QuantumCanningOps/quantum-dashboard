@@ -78,7 +78,14 @@ async function ClientsList() {
             <Card key={client.id}>
               <CardHeader>
                 <div className="flex items-center gap-3">
-                  <CardTitle>{client.name}</CardTitle>
+                  <CardTitle>
+                    <Link
+                      href={`/dashboard/clients/${client.id}`}
+                      className="hover:underline"
+                    >
+                      {client.name}
+                    </Link>
+                  </CardTitle>
                   <Badge className="bg-slate-100 text-slate-600 border-slate-200 font-mono">
                     {client.code}
                   </Badge>
