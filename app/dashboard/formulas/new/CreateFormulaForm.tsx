@@ -125,10 +125,16 @@ export function CreateFormulaForm({
   clients: initialClients,
   items: initialItems,
   skus: initialSkus,
+  defaultClientId = "",
+  defaultSkuId = "",
+  defaultName = "",
 }: {
   clients: ClientOption[];
   items: ItemOption[];
   skus: SkuOption[];
+  defaultClientId?: string;
+  defaultSkuId?: string;
+  defaultName?: string;
 }) {
   const router = useRouter();
   const formulaLinesRequestId = useRef(0);
@@ -153,10 +159,10 @@ export function CreateFormulaForm({
   const [creatingSku, setCreatingSku] = useState(false);
 
   // Formula identity
-  const [clientId, setClientId] = useState("");
-  const [skuId, setSkuId] = useState("");
+  const [clientId, setClientId] = useState(defaultClientId);
+  const [skuId, setSkuId] = useState(defaultSkuId);
   const [formulaNumber, setFormulaNumber] = useState("");
-  const [name, setName] = useState("");
+  const [name, setName] = useState(defaultName);
   const [baseQuantity, setBaseQuantity] = useState("");
   const [baseUnitOfMeasure, setBaseUnitOfMeasure] = useState("");
   const [batchingInstructions, setBatchingInstructions] = useState("");

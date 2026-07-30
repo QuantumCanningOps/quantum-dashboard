@@ -272,22 +272,40 @@ async function ClientDetail({ params }: DetailPageProps) {
                           {sku.shelf_life_days}d shelf life
                         </span>
                       )}
-                      {formula ? (
-                        <Link
-                          href={`/dashboard/formulas/${sku.formula_id}`}
-                          className="ml-auto text-xs text-muted-foreground hover:underline"
-                        >
-                          {formula.formula_number ?? "Formula"} v
-                          {formula.version}
-                          {formula.status === "authorized" && (
-                            <span className="ml-1 text-green-600">✓</span>
-                          )}
-                        </Link>
-                      ) : (
-                        <span className="ml-auto text-xs text-muted-foreground">
-                          No formula
-                        </span>
-                      )}
+                      <div className="ml-auto flex items-center gap-3">
+                        {formula ? (
+                          <>
+                            <Link
+                              href={`/dashboard/formulas/${sku.formula_id}`}
+                              className="text-xs text-muted-foreground hover:underline"
+                            >
+                              {formula.formula_number ?? "Formula"} v
+                              {formula.version}
+                              {formula.status === "authorized" && (
+                                <span className="ml-1 text-green-600">✓</span>
+                              )}
+                            </Link>
+                            <Link
+                              href={`/dashboard/formulas/${sku.formula_id}`}
+                              className="text-xs font-medium text-foreground hover:underline"
+                            >
+                              Edit formula
+                            </Link>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xs text-muted-foreground">
+                              No formula
+                            </span>
+                            <Link
+                              href={`/dashboard/formulas/new?clientId=${id}&skuId=${sku.id}`}
+                              className="text-xs font-medium text-foreground hover:underline"
+                            >
+                              Add formula
+                            </Link>
+                          </>
+                        )}
+                      </div>
                     </div>
                     {skuOrders.length > 0 && (
                       <ul className="ml-4 flex flex-col gap-0.5">
