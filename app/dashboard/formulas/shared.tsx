@@ -32,6 +32,51 @@ export type SkuOption = {
   formula_id?: string | null;
 };
 
+export const DEFAULT_CANS_PER_TRAY = 24;
+export const DEFAULT_CAN_SIZE_OZ = 12;
+export const DEFAULT_CAN_TYPE = "sleek" as const;
+export const DEFAULT_LID_COLOR = "silver";
+
+export type CanType = "sleek" | "slim" | "standard";
+export type SecondaryPackaging =
+  | "none"
+  | "quad_pak"
+  | "carton"
+  | "box"
+  | "other";
+export type PackagingQuantityBasis =
+  | "per_can"
+  | "per_tray"
+  | "per_case"
+  | "per_unit";
+
+export const CAN_TYPES: { value: CanType; label: string }[] = [
+  { value: "sleek", label: "Sleek" },
+  { value: "slim", label: "Slim" },
+  { value: "standard", label: "Standard" },
+];
+
+export const SECONDARY_PACKAGING_OPTIONS: {
+  value: SecondaryPackaging;
+  label: string;
+}[] = [
+  { value: "none", label: "None" },
+  { value: "quad_pak", label: "Quad-pak" },
+  { value: "carton", label: "Carton" },
+  { value: "box", label: "Box" },
+  { value: "other", label: "Other" },
+];
+
+export const PACKAGING_QUANTITY_BASES: {
+  value: PackagingQuantityBasis;
+  label: string;
+}[] = [
+  { value: "per_can", label: "Per can" },
+  { value: "per_tray", label: "Per tray" },
+  { value: "per_case", label: "Per case" },
+  { value: "per_unit", label: "Per unit" },
+];
+
 export type LineType = "ingredient" | "packaging";
 export type QuantityBasis = "per_batch" | "per_can" | "percentage";
 export type ItemType = "raw_ingredient" | "packaging" | "wip" | "finished_good";
@@ -187,17 +232,21 @@ export function NewSkuForm({
 export function NewIngredientForm({
   clientId,
   defaultItemType,
+  defaultName = "",
+  defaultUnitOfMeasure = "",
   onCreated,
   onCancel,
 }: {
   clientId: string;
   defaultItemType: ItemType;
+  defaultName?: string;
+  defaultUnitOfMeasure?: string;
   onCreated: (item: NewItemResult) => void;
   onCancel: () => void;
 }) {
-  const [name, setName] = useState("");
+  const [name, setName] = useState(defaultName);
   const [itemType, setItemType] = useState<ItemType>(defaultItemType);
-  const [uom, setUom] = useState("");
+  const [uom, setUom] = useState(defaultUnitOfMeasure);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -297,6 +346,7 @@ export function LineRow({
   onUpdate,
   onRemove,
   onItemCreated,
+  extractedDescription,
 }: {
   line: LineDraft;
   index: number;
@@ -306,6 +356,7 @@ export function LineRow({
   onUpdate: (key: string, updates: Partial<LineDraft>) => void;
   onRemove: (key: string) => void;
   onItemCreated: (item: NewItemResult) => void;
+  extractedDescription?: string;
 }) {
   const [creatingItem, setCreatingItem] = useState(false);
 
@@ -372,6 +423,17 @@ export function LineRow({
         )}
       </div>
 
+      {extractedDescription && (
+        <div className="rounded bg-blue-50 px-3 py-1.5 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-200">
+          From sheet: <span className="font-medium">{extractedDescription}</span>
+          {!line.itemId && (
+            <span className="ml-1 text-blue-600/80 dark:text-blue-300/80">
+              — select or create matching item
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Row 1: line type + item */}
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-1.5">
@@ -412,6 +474,10 @@ export function LineRow({
         <NewIngredientForm
           clientId={clientId}
           defaultItemType={wantedItemType}
+          defaultName={extractedDescription ?? ""}
+          defaultUnitOfMeasure={
+            line.quantityBasis === "percentage" ? "lbs" : line.unitOfMeasure
+          }
           onCreated={handleNewItemCreated}
           onCancel={() => {
             setCreatingItem(false);

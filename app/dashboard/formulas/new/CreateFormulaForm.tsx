@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { GoogleDrivePickerButton } from "@/components/GoogleDrivePickerButton";
+import { matchItemByDescription } from "@/lib/match-item";
 import { randomId } from "@/lib/utils";
 import { type NewItemResult } from "../../receiving/actions";
 import {
@@ -15,14 +17,25 @@ import {
   LineRow,
   NewSkuForm,
   newLineDraft,
+  itemTypeForLine,
   type ItemOption,
   type SkuOption,
   type LineType,
   type LineDraft,
+  type QuantityBasis,
 } from "../shared";
+import { createDocumentRecord } from "../../documents/actions";
+import {
+  updateFormulaSpecs,
+  updateSkuPackaging,
+  type FormulaSpecInput,
+  type SkuPackagingLineInput,
+} from "../[id]/actions";
 import {
   createClientRecord,
   createFormula,
+  extractFromFormulaPdf,
+  type ExtractedFormulaLine,
   type NewClientResult,
   type NewSkuResult,
 } from "./actions";
@@ -32,8 +45,6 @@ import {
 // ---------------------------------------------------------------------------
 
 type ClientOption = { id: string; name: string; code: string };
-
-type ArtworkDraft = { key: string; file: File };
 
 const STATUSES: { value: "draft" | "pending_authorization"; label: string }[] = [
   { value: "draft", label: "Draft" },
@@ -180,14 +191,230 @@ export function CreateFormulaForm({
   // Formula lines
   const [lines, setLines] = useState<LineDraft[]>([newLineDraft("ingredient")]);
   const [loadingFormulaLines, setLoadingFormulaLines] = useState(false);
+  const [extractedDescriptions, setExtractedDescriptions] = useState<
+    Record<string, string>
+  >({});
+  const [pendingSpecs, setPendingSpecs] = useState<FormulaSpecInput[]>([]);
+  const [pendingPackagingLines, setPendingPackagingLines] = useState<
+    SkuPackagingLineInput[]
+  >([]);
+
+  // Formula sheet import
+  const [formulaSheetFile, setFormulaSheetFile] = useState<File | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractNote, setExtractNote] = useState<string | null>(null);
 
   // Documents
   const [paLetterFile, setPaLetterFile] = useState<File | null>(null);
-  const [artworkFiles, setArtworkFiles] = useState<ArtworkDraft[]>([]);
+  const [artworkFile, setArtworkFile] = useState<File | null>(null);
 
   // Submit state
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  function matchItem(description: string, lineType: LineType): string {
+    const wanted = itemTypeForLine[lineType];
+    const candidates = allItems.filter(
+      (i) =>
+        i.item_type === wanted &&
+        (!clientId || !i.client_id || i.client_id === clientId)
+    );
+    return matchItemByDescription(description, candidates);
+  }
+
+  function normalizeExtractedLine(raw: ExtractedFormulaLine): {
+    lineType: LineType;
+    quantity: string;
+    unitOfMeasure: string;
+    quantityBasis: QuantityBasis;
+    itemDescription: string;
+  } | null {
+    const lineType: LineType =
+      raw.lineType === "packaging" ? "packaging" : "ingredient";
+
+    // Prefer sheet Target Weight/Volume (authoritative) over printed %.
+    const targetLbs =
+      raw.targetWeightLbs != null && Number.isFinite(Number(raw.targetWeightLbs))
+        ? Number(raw.targetWeightLbs)
+        : null;
+    if (targetLbs != null && targetLbs > 0) {
+      return {
+        lineType,
+        quantity: String(targetLbs),
+        unitOfMeasure: "lbs",
+        quantityBasis: "per_batch",
+        itemDescription: (raw.itemDescription ?? "").trim(),
+      };
+    }
+
+    const quantity =
+      raw.quantity != null && Number.isFinite(Number(raw.quantity))
+        ? Number(raw.quantity)
+        : null;
+    if (quantity == null || quantity <= 0) return null;
+
+    const quantityBasis: QuantityBasis =
+      raw.quantityBasis === "per_can" ||
+      raw.quantityBasis === "percentage" ||
+      raw.quantityBasis === "per_batch"
+        ? raw.quantityBasis
+        : "per_batch";
+    const unitOfMeasure =
+      quantityBasis === "percentage"
+        ? "%"
+        : (raw.unitOfMeasure ?? "").trim() || "";
+
+    return {
+      lineType,
+      quantity: String(quantity),
+      unitOfMeasure,
+      quantityBasis,
+      itemDescription: (raw.itemDescription ?? "").trim(),
+    };
+  }
+
+  async function handleExtractFromSheet() {
+    if (!formulaSheetFile) return;
+    if (!clientId) {
+      setExtractNote("Select a client first so extracted ingredients can be matched correctly.");
+      return;
+    }
+
+    setExtracting(true);
+    setExtractNote(null);
+
+    try {
+      const fd = new FormData();
+      fd.append("file", formulaSheetFile);
+      const result = await extractFromFormulaPdf(fd);
+
+      if (!result.ok) {
+        setExtractNote(result.message);
+        return;
+      }
+
+      const { data } = result;
+      const notes: string[] = [];
+
+      if (data.formulaNumber) {
+        setFormulaNumber(data.formulaNumber);
+        notes.push(`formula # ${data.formulaNumber}`);
+      }
+      if (data.name) {
+        setName(data.name);
+        notes.push(`name "${data.name}"`);
+      }
+      if (data.baseQuantity != null && Number(data.baseQuantity) > 0) {
+        setBaseQuantity(String(data.baseQuantity));
+        notes.push(`batch ${data.baseQuantity}`);
+      }
+      if (data.baseUnitOfMeasure) {
+        setBaseUnitOfMeasure(data.baseUnitOfMeasure);
+      }
+      if (data.batchingInstructions) {
+        setBatchingInstructions(data.batchingInstructions);
+        notes.push("batching instructions");
+      }
+
+      const validLines = (data.lines ?? [])
+        .map(normalizeExtractedLine)
+        .filter((l): l is NonNullable<typeof l> => l != null);
+
+      const ingredientLines = validLines.filter((l) => l.lineType === "ingredient");
+      const packagingExtracted = validLines.filter((l) => l.lineType === "packaging");
+
+      const nextPackaging: SkuPackagingLineInput[] = [];
+      for (const l of packagingExtracted) {
+        const itemId = l.itemDescription
+          ? matchItem(l.itemDescription, "packaging")
+          : "";
+        if (!itemId) continue;
+        const matchedItem = allItems.find((i) => i.id === itemId);
+        const isTray = (l.itemDescription ?? "").toLowerCase().includes("tray");
+        nextPackaging.push({
+          itemId,
+          quantity: Number(l.quantity),
+          unitOfMeasure:
+            l.unitOfMeasure || matchedItem?.unit_of_measure || "each",
+          quantityBasis: isTray
+            ? "per_tray"
+            : l.quantityBasis === "per_can"
+              ? "per_can"
+              : "per_unit",
+        });
+      }
+      setPendingPackagingLines(nextPackaging);
+      if (nextPackaging.length > 0) {
+        notes.push(`${nextPackaging.length} packaging component(s)`);
+      }
+
+      if (ingredientLines.length > 0) {
+        // Replace existing lines — re-extract should refresh, not duplicate.
+        const newLines: LineDraft[] = ingredientLines.map((l) => {
+          const itemId = l.itemDescription
+            ? matchItem(l.itemDescription, "ingredient")
+            : "";
+          const matchedItem = itemId
+            ? allItems.find((i) => i.id === itemId)
+            : null;
+          return {
+            key: randomId(),
+            lineType: "ingredient" as const,
+            itemId,
+            quantity: l.quantity,
+            unitOfMeasure:
+              l.quantityBasis === "percentage"
+                ? "%"
+                : l.unitOfMeasure || matchedItem?.unit_of_measure || "",
+            quantityBasis: l.quantityBasis,
+          };
+        });
+
+        const descMap: Record<string, string> = {};
+        ingredientLines.forEach((l, i) => {
+          if (l.itemDescription && newLines[i]) {
+            descMap[newLines[i].key] = l.itemDescription;
+          }
+        });
+        setExtractedDescriptions(descMap);
+        setLines(newLines);
+
+        const matchedCount = newLines.filter((l) => l.itemId).length;
+        const unmatched = newLines.length - matchedCount;
+        notes.push(
+          `${newLines.length} line${newLines.length !== 1 ? "s" : ""} extracted` +
+            (unmatched > 0
+              ? ` (${matchedCount} item${matchedCount !== 1 ? "s" : ""} matched, ${unmatched} need selection)`
+              : " (all items matched)")
+        );
+      }
+
+      const specs: FormulaSpecInput[] = (data.specs ?? [])
+        .filter((s) => !!s.name?.trim())
+        .map((s) => ({
+          name: s.name!.trim(),
+          targetValue: s.targetValue ?? null,
+          minValue: s.minValue ?? null,
+          maxValue: s.maxValue ?? null,
+          unit: s.unit ?? null,
+          notes: s.notes ?? null,
+        }));
+      setPendingSpecs(specs);
+      if (specs.length > 0) {
+        notes.push(
+          `${specs.length} spec${specs.length !== 1 ? "s" : ""} will be saved on create`
+        );
+      }
+
+      setExtractNote(
+        notes.length > 0
+          ? `Extracted: ${notes.join("; ")}.`
+          : "Sheet scanned but no data found — fill in fields manually."
+      );
+    } finally {
+      setExtracting(false);
+    }
+  }
 
   function handleClientChange(value: string) {
     if (value === "__new__") {
@@ -268,14 +495,16 @@ export function CreateFormulaForm({
     }
 
     setLines(
-      data.map((line) => ({
-        key: line.id,
-        lineType: line.line_type as LineType,
-        itemId: line.item_id,
-        quantity: String(line.quantity),
-        unitOfMeasure: line.unit_of_measure,
-        quantityBasis: line.quantity_basis as LineDraft["quantityBasis"],
-      }))
+      data
+        .filter((line) => line.line_type === "ingredient")
+        .map((line) => ({
+          key: line.id,
+          lineType: "ingredient" as const,
+          itemId: line.item_id,
+          quantity: String(line.quantity),
+          unitOfMeasure: line.unit_of_measure,
+          quantityBasis: line.quantity_basis as LineDraft["quantityBasis"],
+        })),
     );
   }
 
@@ -297,16 +526,6 @@ export function CreateFormulaForm({
 
   function addLine(lineType: LineType = "ingredient") {
     setLines((prev) => [...prev, newLineDraft(lineType)]);
-  }
-
-  // ── Artwork file management ──────────────────────────────────────────────
-
-  function addArtworkFile(file: File) {
-    setArtworkFiles((prev) => [...prev, { key: randomId(), file }]);
-  }
-
-  function removeArtworkFile(key: string) {
-    setArtworkFiles((prev) => prev.filter((a) => a.key !== key));
   }
 
   // ── Validation ────────────────────────────────────────────────────────────
@@ -347,15 +566,16 @@ export function CreateFormulaForm({
         paLetter = { fileName: paLetterFile.name, storagePath: path };
       }
 
-      const artworkUploads = await Promise.all(
-        artworkFiles.map(async ({ file }) => {
-          const uuid = randomId();
-          const path = `${clientId}/artwork/${uuid}/${file.name}`;
-          const { error } = await supabase.storage.from("documents").upload(path, file);
-          if (error) throw new Error(error.message);
-          return { fileName: file.name, storagePath: path };
-        })
-      );
+      let artwork: { fileName: string; storagePath: string } | null = null;
+      if (artworkFile) {
+        const uuid = randomId();
+        const path = `${clientId}/artwork/${uuid}/${artworkFile.name}`;
+        const { error } = await supabase.storage
+          .from("documents")
+          .upload(path, artworkFile);
+        if (error) throw new Error(error.message);
+        artwork = { fileName: artworkFile.name, storagePath: path };
+      }
 
       const result = await createFormula({
         clientId,
@@ -366,15 +586,17 @@ export function CreateFormulaForm({
         baseUnitOfMeasure: baseUnitOfMeasure.trim(),
         batchingInstructions: batchingInstructions.trim() || null,
         status,
-        lines: lines.map((l) => ({
-          itemId: l.itemId,
-          lineType: l.lineType,
-          quantity: Number(l.quantity),
-          unitOfMeasure: l.unitOfMeasure.trim(),
-          quantityBasis: l.quantityBasis,
-        })),
+        lines: lines
+          .filter((l) => l.lineType === "ingredient")
+          .map((l) => ({
+            itemId: l.itemId,
+            lineType: "ingredient" as const,
+            quantity: Number(l.quantity),
+            unitOfMeasure: l.unitOfMeasure.trim(),
+            quantityBasis: l.quantityBasis,
+          })),
         paLetter,
-        artworkFiles: artworkUploads,
+        artworkFiles: artwork ? [artwork] : [],
       });
 
       if (!result.success) {
@@ -382,7 +604,72 @@ export function CreateFormulaForm({
         return;
       }
 
-      router.push(`/dashboard/formulas/${result.id}`);
+      const postCreateWarnings: string[] = [];
+
+      if (skuId && pendingPackagingLines.length > 0) {
+        const packagingResult = await updateSkuPackaging({
+          skuId,
+          formulaId: result.id,
+          header: {
+            cansPerTray: 24,
+            canSizeOz: 12,
+            canType: "sleek",
+            lidColor: "silver",
+            secondaryPackaging: "none",
+            trayNotes: null,
+            lidNotes: null,
+            notes: null,
+          },
+          lines: pendingPackagingLines,
+        });
+        if (!packagingResult.success) {
+          postCreateWarnings.push(
+            `packaging failed to save: ${packagingResult.error}`,
+          );
+        }
+      } else if (!skuId && pendingPackagingLines.length > 0) {
+        postCreateWarnings.push(
+          "packaging components were extracted but no SKU was linked — add them under Packaging on the formula detail",
+        );
+      }
+
+      if (formulaSheetFile) {
+        try {
+          const uuid = randomId();
+          const path = `${clientId}/spec_sheet/${uuid}/${formulaSheetFile.name}`;
+          const { error } = await supabase.storage
+            .from("documents")
+            .upload(path, formulaSheetFile);
+          if (error) throw new Error(error.message);
+          await createDocumentRecord({
+            clientId,
+            documentType: "spec_sheet",
+            fileName: formulaSheetFile.name,
+            storagePath: path,
+            formulaId: result.id,
+          });
+        } catch (e) {
+          postCreateWarnings.push(
+            `sheet upload failed: ${e instanceof Error ? e.message : "unknown error"}`
+          );
+        }
+      }
+
+      if (pendingSpecs.length > 0) {
+        const specsResult = await updateFormulaSpecs(result.id, pendingSpecs);
+        if (!specsResult.success) {
+          postCreateWarnings.push(`specs failed to save: ${specsResult.error}`);
+        }
+      }
+
+      if (postCreateWarnings.length > 0) {
+        const warn = encodeURIComponent(
+          postCreateWarnings.join("; ").slice(0, 500)
+        );
+        router.push(`/dashboard/formulas/${result.id}?importWarn=${warn}`);
+      } else {
+        router.push(`/dashboard/formulas/${result.id}`);
+      }
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : "Upload failed");
     } finally {
@@ -404,6 +691,77 @@ export function CreateFormulaForm({
           Cancel
         </Button>
       </div>
+
+      {/* ── Import from formula sheet ────────────────────────────────── */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Import from Formula Sheet</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <p className="text-sm text-muted-foreground">
+            Upload a batching data sheet (PDF or image) to prefill formula identity,
+            lines, batching instructions, and specs. Select a client first, then extract
+            and review item matches before saving.
+          </p>
+          {formulaSheetFile ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                <span className="font-mono truncate flex-1">{formulaSheetFile.name}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void handleExtractFromSheet();
+                  }}
+                  disabled={extracting || !clientId}
+                  title={!clientId ? "Select a client first" : undefined}
+                >
+                  {extracting ? "Extracting…" : "Extract from sheet"}
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFormulaSheetFile(null);
+                    setExtractNote(null);
+                  }}
+                  className="text-xs text-muted-foreground hover:text-destructive"
+                >
+                  Remove
+                </button>
+              </div>
+              {extractNote && (
+                <p className="text-xs text-muted-foreground">{extractNote}</p>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+              <Label
+                htmlFor="formula-sheet-file"
+                className="cursor-pointer flex flex-1 items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
+              >
+                <span>Upload formula sheet (PDF or PNG) — optional</span>
+                <input
+                  id="formula-sheet-file"
+                  type="file"
+                  className="sr-only"
+                  accept=".pdf,image/png,image/jpeg"
+                  onChange={(e) => {
+                    setFormulaSheetFile(e.target.files?.[0] ?? null);
+                    setExtractNote(null);
+                  }}
+                />
+              </Label>
+              <GoogleDrivePickerButton
+                disabled={extracting}
+                onFile={(file) => {
+                  setFormulaSheetFile(file);
+                  setExtractNote(null);
+                }}
+              />
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* ── Formula Identity ─────────────────────────────────────────── */}
       <Card>
@@ -577,6 +935,7 @@ export function CreateFormulaForm({
               onUpdate={updateLine}
               onRemove={removeLine}
               onItemCreated={handleItemCreated}
+              extractedDescription={extractedDescriptions[line.key]}
             />
           ))}
 
@@ -584,10 +943,14 @@ export function CreateFormulaForm({
             <Button type="button" variant="outline" size="sm" onClick={() => addLine("ingredient")}>
               + Add Ingredient Line
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => addLine("packaging")}>
-              + Add Packaging Line
-            </Button>
           </div>
+          {pendingPackagingLines.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {pendingPackagingLines.length} packaging component
+              {pendingPackagingLines.length !== 1 ? "s" : ""} from the sheet
+              will be saved to the linked SKU on create.
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -611,53 +974,66 @@ export function CreateFormulaForm({
                 </button>
               </div>
             ) : (
-              <Label
-                htmlFor="pa-letter-file"
-                className="cursor-pointer flex items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
-              >
-                <span>Upload PA Letter (PDF or PNG) — optional</span>
-                <input
-                  id="pa-letter-file"
-                  type="file"
-                  className="sr-only"
-                  accept=".pdf,image/png,image/jpeg"
-                  onChange={(e) => setPaLetterFile(e.target.files?.[0] ?? null)}
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                <Label
+                  htmlFor="pa-letter-file"
+                  className="cursor-pointer flex flex-1 items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
+                >
+                  <span>Upload PA Letter (PDF or PNG) — optional</span>
+                  <input
+                    id="pa-letter-file"
+                    type="file"
+                    className="sr-only"
+                    accept=".pdf,image/png,image/jpeg"
+                    onChange={(e) => setPaLetterFile(e.target.files?.[0] ?? null)}
+                  />
+                </Label>
+                <GoogleDrivePickerButton
+                  onFile={(file) => {
+                    setPaLetterFile(file);
+                  }}
                 />
-              </Label>
+              </div>
             )}
           </div>
 
           <div className="flex flex-col gap-2">
             <Label>Can Artwork</Label>
-            {artworkFiles.map((a) => (
-              <div key={a.key} className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm">
-                <span className="font-mono truncate flex-1">{a.file.name}</span>
+            {artworkFile ? (
+              <div className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                <span className="font-mono truncate flex-1">{artworkFile.name}</span>
                 <button
                   type="button"
-                  onClick={() => removeArtworkFile(a.key)}
+                  onClick={() => setArtworkFile(null)}
                   className="text-xs text-muted-foreground hover:text-destructive"
                 >
                   Remove
                 </button>
               </div>
-            ))}
-            <Label
-              htmlFor="artwork-file"
-              className="cursor-pointer flex items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
-            >
-              <span>+ Add artwork file (PDF or PNG) — optional</span>
-              <input
-                id="artwork-file"
-                type="file"
-                className="sr-only"
-                accept=".pdf,image/png,image/jpeg"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) addArtworkFile(file);
-                  e.target.value = "";
-                }}
-              />
-            </Label>
+            ) : (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                <Label
+                  htmlFor="artwork-file"
+                  className="cursor-pointer flex flex-1 items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
+                >
+                  <span>Upload artwork (PDF or PNG) — optional</span>
+                  <input
+                    id="artwork-file"
+                    type="file"
+                    className="sr-only"
+                    accept=".pdf,image/png,image/jpeg"
+                    onChange={(e) =>
+                      setArtworkFile(e.target.files?.[0] ?? null)
+                    }
+                  />
+                </Label>
+                <GoogleDrivePickerButton
+                  onFile={(file) => {
+                    setArtworkFile(file);
+                  }}
+                />
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

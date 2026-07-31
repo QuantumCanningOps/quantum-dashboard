@@ -3,31 +3,44 @@ import {
   FormulaBatchScaler,
   type FormulaLine,
   type InventoryAvailability,
+  type PackagingLineView,
 } from "./FormulaBatchScaler";
 import { EditableSku, type SkuRow } from "./EditableSku";
+import {
+  EditableSkuPackaging,
+  type SkuPackagingHeader,
+  type SkuPackagingLine,
+} from "./EditableSkuPackaging";
 import { EditableBatchingInstructions } from "./EditableBatchingInstructions";
 import { EditableSpecs, type FormulaSpec } from "./EditableSpecs";
+import {
+  FormulaDocuments,
+  type FormulaDocument,
+} from "./FormulaDocuments";
+import { ImportWarningBanner } from "./ImportWarningBanner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import type { ItemOption, SkuOption } from "../shared";
+import type { CanType, ItemOption, SecondaryPackaging, SkuOption } from "../shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
 type FormulaPageProps = {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ importWarn?: string }>;
 };
 
-export default function FormulaPage({ params }: FormulaPageProps) {
+export default function FormulaPage({ params, searchParams }: FormulaPageProps) {
   return (
     <Suspense fallback={<FormulaFallback />}>
-      <FormulaDetail params={params} />
+      <FormulaDetail params={params} searchParams={searchParams} />
     </Suspense>
   );
 }
 
-async function FormulaDetail({ params }: FormulaPageProps) {
+async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
   const { id } = await params;
+  const importWarn = ((await searchParams)?.importWarn ?? "").trim();
   const supabase = await createClient();
 
   const { data: formula } = await supabase
@@ -48,6 +61,8 @@ async function FormulaDetail({ params }: FormulaPageProps) {
     { data: specs },
     { data: items },
     { data: clientSkus },
+    { data: documents },
+    { count: orphanPackagingCount },
   ] = await Promise.all([
     supabase
       .from("skus")
@@ -57,7 +72,7 @@ async function FormulaDetail({ params }: FormulaPageProps) {
       .from("formula_lines")
       .select("id, item_id, line_type, quantity, unit_of_measure, quantity_basis, items(name, item_type, unit_of_measure)")
       .eq("formula_id", id)
-      .order("line_type")
+      .eq("line_type", "ingredient")
       .order("quantity", { ascending: false }),
     supabase
       .from("formula_specs")
@@ -75,15 +90,75 @@ async function FormulaDetail({ params }: FormulaPageProps) {
       .select("id, client_id, code, name, shelf_life_days")
       .eq("client_id", formula.client_id)
       .order("code"),
+    supabase
+      .from("documents")
+      .select(
+        "id, document_type, file_name, storage_path, uploaded_at, artwork_status",
+      )
+      .eq("formula_id", id)
+      .in("document_type", ["pa_letter", "artwork"])
+      .order("uploaded_at", { ascending: false }),
+    supabase
+      .from("formula_lines")
+      .select("id", { count: "exact", head: true })
+      .eq("formula_id", id)
+      .eq("line_type", "packaging"),
   ]);
+
+  const linkedSkus = (skus ?? []) as SkuRow[];
+  const linkedSkuId = linkedSkus[0]?.id ?? null;
+
+  let packagingHeader: SkuPackagingHeader | null = null;
+  let packagingLines: SkuPackagingLine[] = [];
+  if (linkedSkuId) {
+    const [{ data: packaging }, { data: pkgLines }] = await Promise.all([
+      supabase
+        .from("sku_packaging")
+        .select(
+          "sku_id, cans_per_tray, can_size_oz, can_type, lid_color, secondary_packaging, tray_notes, lid_notes, notes",
+        )
+        .eq("sku_id", linkedSkuId)
+        .maybeSingle(),
+      supabase
+        .from("sku_packaging_lines")
+        .select(
+          "id, item_id, quantity, unit_of_measure, quantity_basis, items(name, item_type, unit_of_measure)",
+        )
+        .eq("packaging_id", linkedSkuId)
+        .order("quantity", { ascending: false }),
+    ]);
+    packagingHeader = packaging
+      ? ({
+          ...packaging,
+          can_type: packaging.can_type as CanType,
+          secondary_packaging:
+            packaging.secondary_packaging as SecondaryPackaging,
+        } as SkuPackagingHeader)
+      : null;
+    packagingLines = (pkgLines ?? []) as unknown as SkuPackagingLine[];
+  }
 
   const client = formula.clients as unknown as { name: string; code: string } | null;
   const formulaLines = (lines ?? []) as unknown as FormulaLine[];
   const formulaSpecs = (specs ?? []) as FormulaSpec[];
-  const linkedSkus = (skus ?? []) as SkuRow[];
+  const formulaDocuments = await withArtworkPreviewUrls(
+    supabase,
+    (documents ?? []) as Array<
+      FormulaDocument & { storage_path: string }
+    >,
+  );
+  const packagingLineViews: PackagingLineView[] = packagingLines.map((line) => ({
+    id: line.id,
+    item_id: line.item_id,
+    quantity: Number(line.quantity),
+    unit_of_measure: line.unit_of_measure,
+    quantity_basis: line.quantity_basis,
+    items: line.items,
+  }));
   const inventoryAvailability = await getInventoryAvailability(
     supabase,
     formulaLines,
+    packagingLineViews,
   );
 
   return (
@@ -113,6 +188,15 @@ async function FormulaDetail({ params }: FormulaPageProps) {
         </p>
       </div>
 
+      {importWarn && <ImportWarningBanner message={importWarn} />}
+
+      {(orphanPackagingCount ?? 0) > 0 && !linkedSkuId && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          This formula still has packaging lines but no linked SKU. Link a SKU
+          and move packaging into SKU Packaging specs.
+        </div>
+      )}
+
       <div className="grid md:grid-cols-[1fr_2fr] gap-6">
         <EditableSku
           formulaId={formula.id}
@@ -127,17 +211,39 @@ async function FormulaDetail({ params }: FormulaPageProps) {
         />
       </div>
 
+      <EditableSkuPackaging
+        formulaId={formula.id}
+        clientId={formula.client_id}
+        skuId={linkedSkuId}
+        packaging={packagingHeader}
+        lines={packagingLines}
+        items={(items ?? []) as ItemOption[]}
+      />
+
       <FormulaBatchScaler
         baseQuantity={Number(formula.base_quantity)}
         baseUnitOfMeasure={formula.base_unit_of_measure}
         clientId={formula.client_id}
         formulaId={formula.id}
         lines={formulaLines}
+        packagingLines={packagingLineViews}
         items={(items ?? []) as ItemOption[]}
         inventoryAvailability={inventoryAvailability}
+        cansPerTray={packagingHeader?.cans_per_tray}
+        canSizeOz={
+          packagingHeader?.can_size_oz != null
+            ? Number(packagingHeader.can_size_oz)
+            : undefined
+        }
       />
 
       <EditableSpecs formulaId={formula.id} specs={formulaSpecs} />
+
+      <FormulaDocuments
+        formulaId={formula.id}
+        clientId={formula.client_id}
+        documents={formulaDocuments}
+      />
     </div>
   );
 }
@@ -183,11 +289,40 @@ function FormulaStatusBadge({ status }: { status: string }) {
   return <Badge className={map[status] ?? ""}>{labels[status] ?? status}</Badge>;
 }
 
+async function withArtworkPreviewUrls(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  documents: Array<FormulaDocument & { storage_path: string }>,
+): Promise<FormulaDocument[]> {
+  return Promise.all(
+    documents.map(async (doc) => {
+      const { storage_path: _storagePath, ...rest } = doc;
+      if (doc.document_type !== "artwork") {
+        return rest;
+      }
+
+      const { data: signed } = await supabase.storage
+        .from("documents")
+        .createSignedUrl(doc.storage_path, 60 * 60);
+
+      return {
+        ...rest,
+        previewUrl: signed?.signedUrl ?? null,
+      };
+    }),
+  );
+}
+
 async function getInventoryAvailability(
   supabase: Awaited<ReturnType<typeof createClient>>,
   formulaLines: FormulaLine[],
+  packagingLines: PackagingLineView[],
 ) {
-  const itemIds = Array.from(new Set(formulaLines.map((line) => line.item_id)));
+  const itemIds = Array.from(
+    new Set([
+      ...formulaLines.map((line) => line.item_id),
+      ...packagingLines.map((line) => line.item_id),
+    ]),
+  );
 
   if (itemIds.length === 0) {
     return {};

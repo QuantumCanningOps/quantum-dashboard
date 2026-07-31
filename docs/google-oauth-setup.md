@@ -9,6 +9,7 @@ Connect Google is a **separate** OAuth flow from Supabase login. Users stay sign
    - Gmail API
    - Google Drive API
    - Google Calendar API
+   - Google Picker API (required for “Google Drive” file pickers on formula uploads)
 3. Configure the **OAuth consent screen**
    - Use **Internal** if everyone is on your Google Workspace.
    - Use **External** otherwise (Testing mode limits who can connect; refresh tokens expire ~7 days until the app is verified).
@@ -22,7 +23,10 @@ Connect Google is a **separate** OAuth flow from Supabase login. Users stay sign
 - `openid` `email` `profile`
 - `https://www.googleapis.com/auth/gmail.modify`
 - `https://www.googleapis.com/auth/drive.file`
+- `https://www.googleapis.com/auth/drive.readonly` (needed to download existing/shared Drive files picked in the UI)
 - `https://www.googleapis.com/auth/calendar`
+
+After changing scopes, users must **Disconnect** and **Connect Google** again in Settings so the new Drive permission is granted.
 
 These are sensitive/restricted scopes. Production use outside a small test user list requires Google OAuth verification.
 
@@ -35,6 +39,8 @@ GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GOOGLE_REDIRECT_URI=http://localhost:3000/api/google/oauth/callback
 GOOGLE_TOKEN_ENCRYPTION_KEY=
+GOOGLE_API_KEY=
+GOOGLE_APP_ID=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
@@ -43,6 +49,10 @@ Generate a 32-byte encryption key (base64):
 ```bash
 openssl rand -base64 32
 ```
+
+`GOOGLE_API_KEY` is a Google Cloud **API key** with the Picker API enabled (used by the Drive file picker on New Formula / formula documents). Restrict it by HTTP referrer in production.
+
+`GOOGLE_APP_ID` is optional — the Cloud project *number* (not the OAuth client id). Set it if Picker requires `setAppId`.
 
 `SUPABASE_SERVICE_ROLE_KEY` comes from Supabase project settings → API. Locally, run `supabase status -o env` in `quantum-ops` and copy `SERVICE_ROLE_KEY`. Used only on the server to read/write encrypted Google tokens.
 
