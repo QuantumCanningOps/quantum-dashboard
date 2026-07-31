@@ -9,7 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { createDocumentRecord } from "@/app/dashboard/documents/actions";
+import {
+  createDocumentRecord,
+  replaceDocumentRecord,
+} from "@/app/dashboard/documents/actions";
 import { GoogleDrivePickerButton } from "@/components/GoogleDrivePickerButton";
 import { randomId } from "@/lib/utils";
 
@@ -19,7 +22,16 @@ export type FormulaDocument = {
   file_name: string;
   uploaded_at: string;
   artwork_status: string | null;
+  previewUrl?: string | null;
 };
+
+function isImageFile(fileName: string) {
+  return /\.(png|jpe?g|gif|webp|bmp)$/i.test(fileName);
+}
+
+function isPdfFile(fileName: string) {
+  return /\.pdf$/i.test(fileName);
+}
 
 function ArtworkStatusBadge({ status }: { status: string | null }) {
   if (!status) return null;
@@ -40,6 +52,25 @@ function ArtworkStatusBadge({ status }: { status: string | null }) {
   );
 }
 
+function DocumentActions({ doc }: { doc: FormulaDocument }) {
+  return (
+    <div className="flex gap-2 shrink-0">
+      <Button asChild variant="outline" size="sm">
+        <Link
+          href={`/dashboard/documents/${doc.id}/view`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          View
+        </Link>
+      </Button>
+      <Button asChild variant="outline" size="sm">
+        <Link href={`/dashboard/documents/${doc.id}/download`}>Download</Link>
+      </Button>
+    </div>
+  );
+}
+
 function DocumentRow({ doc }: { doc: FormulaDocument }) {
   return (
     <div className="flex flex-col gap-2 rounded-md border bg-muted/30 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
@@ -54,19 +85,52 @@ function DocumentRow({ doc }: { doc: FormulaDocument }) {
           Uploaded {new Date(doc.uploaded_at).toLocaleDateString()}
         </p>
       </div>
-      <div className="flex gap-2 shrink-0">
-        <Button asChild variant="outline" size="sm">
-          <Link
-            href={`/dashboard/documents/${doc.id}/view`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            View
-          </Link>
-        </Button>
-        <Button asChild variant="outline" size="sm">
-          <Link href={`/dashboard/documents/${doc.id}/download`}>Download</Link>
-        </Button>
+      <DocumentActions doc={doc} />
+    </div>
+  );
+}
+
+function ArtworkPreviewCard({ doc }: { doc: FormulaDocument }) {
+  const previewUrl = doc.previewUrl ?? null;
+  const imagePreview =
+    previewUrl && isImageFile(doc.file_name) ? previewUrl : null;
+  const pdfPreview =
+    previewUrl && isPdfFile(doc.file_name) ? previewUrl : null;
+
+  return (
+    <div className="overflow-hidden rounded-md border bg-muted/30">
+      {imagePreview && (
+        <Link
+          href={`/dashboard/documents/${doc.id}/view`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block bg-white"
+        >
+          <img
+            src={imagePreview}
+            alt={`Can artwork: ${doc.file_name}`}
+            className="mx-auto max-h-96 w-full object-contain"
+          />
+        </Link>
+      )}
+      {pdfPreview && (
+        <iframe
+          src={pdfPreview}
+          title={`Can artwork: ${doc.file_name}`}
+          className="h-96 w-full bg-white"
+        />
+      )}
+      <div className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="truncate text-sm font-medium font-mono">{doc.file_name}</p>
+            <ArtworkStatusBadge status={doc.artwork_status} />
+          </div>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Uploaded {new Date(doc.uploaded_at).toLocaleDateString()}
+          </p>
+        </div>
+        <DocumentActions doc={doc} />
       </div>
     </div>
   );
@@ -77,16 +141,22 @@ function FormulaDocUpload({
   formulaId,
   documentType,
   label,
+  replaceDocumentId,
 }: {
   clientId: string;
   formulaId: string;
   documentType: "pa_letter" | "artwork";
   label: string;
+  replaceDocumentId?: string;
 }) {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isReplace = Boolean(replaceDocumentId);
+  const inputId = isReplace
+    ? `${documentType}-replace-file`
+    : `${documentType}-file`;
 
   async function handleUpload() {
     if (!file) return;
@@ -104,13 +174,21 @@ function FormulaDocUpload({
 
       if (uploadError) throw new Error(uploadError.message);
 
-      await createDocumentRecord({
-        clientId,
-        documentType,
-        fileName: file.name,
-        storagePath: path,
-        formulaId,
-      });
+      if (replaceDocumentId) {
+        await replaceDocumentRecord({
+          documentId: replaceDocumentId,
+          fileName: file.name,
+          storagePath: path,
+        });
+      } else {
+        await createDocumentRecord({
+          clientId,
+          documentType,
+          fileName: file.name,
+          storagePath: path,
+          formulaId,
+        });
+      }
 
       setFile(null);
       router.refresh();
@@ -123,12 +201,12 @@ function FormulaDocUpload({
 
   return (
     <div className="flex flex-col gap-2">
-      <Label htmlFor={`${documentType}-file`} className="text-xs">
+      <Label htmlFor={inputId} className="text-xs">
         {label}
       </Label>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <Input
-          id={`${documentType}-file`}
+          id={inputId}
           type="file"
           accept=".pdf,image/png,image/jpeg"
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
@@ -143,13 +221,20 @@ function FormulaDocUpload({
         <Button
           type="button"
           size="sm"
+          variant={isReplace ? "outline" : "default"}
           onClick={() => {
             void handleUpload();
           }}
           disabled={!file || uploading}
           className="shrink-0"
         >
-          {uploading ? "Uploading…" : "Upload"}
+          {uploading
+            ? isReplace
+              ? "Replacing…"
+              : "Uploading…"
+            : isReplace
+              ? "Replace"
+              : "Upload"}
         </Button>
       </div>
       {file && (
@@ -171,8 +256,11 @@ export function FormulaDocuments({
   clientId: string;
   documents: FormulaDocument[];
 }) {
-  const paLetters = documents.filter((d) => d.document_type === "pa_letter");
-  const artwork = documents.filter((d) => d.document_type === "artwork");
+  // One PA letter and one artwork per formula (newest if legacy multiples exist).
+  const paLetter =
+    documents.find((d) => d.document_type === "pa_letter") ?? null;
+  const artwork =
+    documents.find((d) => d.document_type === "artwork") ?? null;
 
   return (
     <Card>
@@ -183,7 +271,7 @@ export function FormulaDocuments({
         <section className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-medium">PA Letter</h3>
-            {paLetters.length > 0 ? (
+            {paLetter ? (
               <Badge className="bg-green-100 text-green-800 border-green-200">
                 On File
               </Badge>
@@ -193,31 +281,38 @@ export function FormulaDocuments({
               </Badge>
             )}
           </div>
-          {paLetters.length > 0 ? (
-            <div className="flex flex-col gap-2">
-              {paLetters.map((doc) => (
-                <DocumentRow key={doc.id} doc={doc} />
-              ))}
-            </div>
+          {paLetter ? (
+            <>
+              <DocumentRow doc={paLetter} />
+              <FormulaDocUpload
+                clientId={clientId}
+                formulaId={formulaId}
+                documentType="pa_letter"
+                label="Replace PA letter (PDF or PNG)"
+                replaceDocumentId={paLetter.id}
+              />
+            </>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              No PA letter is on file for this formula.
-            </p>
+            <>
+              <p className="text-sm text-muted-foreground">
+                No PA letter is on file for this formula.
+              </p>
+              <FormulaDocUpload
+                clientId={clientId}
+                formulaId={formulaId}
+                documentType="pa_letter"
+                label="Upload PA letter (PDF or PNG)"
+              />
+            </>
           )}
-          <FormulaDocUpload
-            clientId={clientId}
-            formulaId={formulaId}
-            documentType="pa_letter"
-            label={paLetters.length > 0 ? "Upload another PA letter" : "Upload PA letter (PDF or PNG)"}
-          />
         </section>
 
         <section className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-medium">Can Artwork</h3>
-            {artwork.length > 0 ? (
+            {artwork ? (
               <Badge className="bg-green-100 text-green-800 border-green-200">
-                {artwork.length} file{artwork.length !== 1 ? "s" : ""}
+                On File
               </Badge>
             ) : (
               <Badge className="bg-amber-100 text-amber-800 border-amber-200">
@@ -225,23 +320,30 @@ export function FormulaDocuments({
               </Badge>
             )}
           </div>
-          {artwork.length > 0 ? (
-            <div className="flex flex-col gap-2">
-              {artwork.map((doc) => (
-                <DocumentRow key={doc.id} doc={doc} />
-              ))}
-            </div>
+          {artwork ? (
+            <>
+              <ArtworkPreviewCard doc={artwork} />
+              <FormulaDocUpload
+                clientId={clientId}
+                formulaId={formulaId}
+                documentType="artwork"
+                label="Replace artwork (PDF or PNG)"
+                replaceDocumentId={artwork.id}
+              />
+            </>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              No can artwork is on file for this formula.
-            </p>
+            <>
+              <p className="text-sm text-muted-foreground">
+                No can artwork is on file for this formula.
+              </p>
+              <FormulaDocUpload
+                clientId={clientId}
+                formulaId={formulaId}
+                documentType="artwork"
+                label="Upload artwork (PDF or PNG)"
+              />
+            </>
           )}
-          <FormulaDocUpload
-            clientId={clientId}
-            formulaId={formulaId}
-            documentType="artwork"
-            label={artwork.length > 0 ? "Add artwork file" : "Upload artwork (PDF or PNG)"}
-          />
         </section>
       </CardContent>
     </Card>

@@ -44,22 +44,52 @@ export async function saveGoogleConnection(params: {
   const { userId, googleEmail, googleSub, scopes, tokens } = params;
 
   const admin = createAdminClient();
-  const { data: existingRow, error: existingError } = await admin
+  const { data: existingByUser, error: byUserError } = await admin
     .from("google_connections")
     .select("token_ciphertext")
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (existingError) {
+  if (byUserError) {
     throw new Error(
-      `Failed to load Google connection: ${existingError.message}`,
+      `Failed to load Google connection: ${byUserError.message}`,
     );
   }
 
+  const { data: existingBySub, error: bySubError } = await admin
+    .from("google_connections")
+    .select("user_id, token_ciphertext")
+    .eq("google_sub", googleSub)
+    .maybeSingle();
+
+  if (bySubError) {
+    throw new Error(
+      `Failed to load Google connection by sub: ${bySubError.message}`,
+    );
+  }
+
+  // google_sub is unique across users. Upsert only conflicts on user_id, so a
+  // reconnect under a different dashboard user (or after a partial disconnect)
+  // must release the prior row first.
+  if (existingBySub && existingBySub.user_id !== userId) {
+    const { error: reclaimError } = await admin
+      .from("google_connections")
+      .delete()
+      .eq("google_sub", googleSub);
+
+    if (reclaimError) {
+      throw new Error(
+        `Failed to reclaim Google connection: ${reclaimError.message}`,
+      );
+    }
+  }
+
   let previous: GoogleTokenPayload | null = null;
-  if (existingRow?.token_ciphertext) {
+  const priorCipher =
+    existingByUser?.token_ciphertext ?? existingBySub?.token_ciphertext;
+  if (priorCipher) {
     try {
-      previous = decryptTokens(existingRow.token_ciphertext);
+      previous = decryptTokens(priorCipher);
     } catch {
       previous = null;
     }

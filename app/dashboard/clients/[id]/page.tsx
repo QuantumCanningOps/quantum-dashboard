@@ -83,7 +83,7 @@ async function ClientDetail({ params }: DetailPageProps) {
     supabase
       .from("skus")
       .select(
-        "id, code, name, shelf_life_days, formula_id, formulas(id, version, status, formula_number, name)",
+        "id, code, name, shelf_life_days, formula_id, sku_packaging(cans_per_tray, can_type, lid_color), formulas(id, version, status, formula_number, name)",
       )
       .eq("client_id", id)
       .order("code"),
@@ -256,6 +256,15 @@ async function ClientDetail({ params }: DetailPageProps) {
                   formula_number: string | null;
                   name: string | null;
                 } | null;
+                const packaging = (
+                  Array.isArray(sku.sku_packaging)
+                    ? sku.sku_packaging[0]
+                    : sku.sku_packaging
+                ) as {
+                  cans_per_tray: number;
+                  can_type: string;
+                  lid_color: string;
+                } | null;
                 const skuOrders = ordersBySku[sku.id] ?? [];
                 return (
                   <li
@@ -270,6 +279,12 @@ async function ClientDetail({ params }: DetailPageProps) {
                       {sku.shelf_life_days != null && (
                         <span className="text-xs text-muted-foreground">
                           {sku.shelf_life_days}d shelf life
+                        </span>
+                      )}
+                      {packaging && (
+                        <span className="text-xs text-muted-foreground">
+                          {packaging.cans_per_tray}-can trays ·{" "}
+                          {packaging.can_type} · {packaging.lid_color} lids
                         </span>
                       )}
                       <div className="ml-auto flex items-center gap-3">

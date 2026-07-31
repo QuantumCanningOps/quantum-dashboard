@@ -84,6 +84,49 @@ export async function updateFormulaSku(data: {
 }
 
 // ---------------------------------------------------------------------------
+// SKU packaging — replace header + lines
+// ---------------------------------------------------------------------------
+
+export type SkuPackagingHeaderInput = {
+  cansPerTray: number;
+  canSizeOz: number;
+  canType: "sleek" | "slim" | "standard";
+  lidColor: string;
+  secondaryPackaging: "none" | "quad_pak" | "carton" | "box" | "other";
+  trayNotes: string | null;
+  lidNotes: string | null;
+  notes: string | null;
+};
+
+export type SkuPackagingLineInput = {
+  itemId: string;
+  quantity: number;
+  unitOfMeasure: string;
+  quantityBasis: "per_can" | "per_tray" | "per_case" | "per_unit";
+};
+
+export async function updateSkuPackaging(data: {
+  skuId: string;
+  formulaId: string;
+  header: SkuPackagingHeaderInput;
+  lines: SkuPackagingLineInput[];
+}): Promise<ActionResult> {
+  const { supabase, user } = await requireInternalUser();
+  if (!user) return { success: false, error: "Not authenticated" };
+
+  const { error } = await supabase.rpc("replace_sku_packaging", {
+    p_sku_id: data.skuId,
+    p_header: data.header,
+    p_lines: data.lines,
+  });
+  if (error) return { success: false, error: error.message };
+
+  revalidatePath(`/dashboard/formulas/${data.formulaId}`);
+  revalidatePath("/dashboard/clients");
+  return { success: true };
+}
+
+// ---------------------------------------------------------------------------
 // Formula lines — replace-all
 // ---------------------------------------------------------------------------
 

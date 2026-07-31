@@ -16,6 +16,7 @@ type OrderRow = {
   id: string;
   client_id: string;
   formula_id: string | null;
+  sku_id: string | null;
   order_number: string;
   ordered_quantity: number;
   actual_quantity: number | null;
@@ -23,7 +24,14 @@ type OrderRow = {
   status: string;
   created_at: string;
   clients: { name: string; code: string } | null;
-  skus: { code: string; name: string } | null;
+  skus: {
+    code: string;
+    name: string;
+    sku_packaging:
+      | { cans_per_tray: number }
+      | { cans_per_tray: number }[]
+      | null;
+  } | null;
   formulas: {
     formula_number: string | null;
     name: string | null;
@@ -57,7 +65,7 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
   let query = supabase
     .from("production_orders")
     .select(
-      "id, client_id, formula_id, order_number, ordered_quantity, actual_quantity, unit_of_measure, status, created_at, clients(name, code), skus(code, name), formulas(formula_number, name, version, base_quantity, base_unit_of_measure), batches(id, batch_number, status)"
+      "id, client_id, formula_id, sku_id, order_number, ordered_quantity, actual_quantity, unit_of_measure, status, created_at, clients(name, code), skus(code, name, sku_packaging(cans_per_tray)), formulas(formula_number, name, version, base_quantity, base_unit_of_measure), batches(id, batch_number, status)"
     )
     .order("created_at", { ascending: false });
 
@@ -114,13 +122,27 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
       ? supabase
           .from("formula_lines")
           .select("formula_id, item_id, quantity")
+          .eq("line_type", "ingredient")
           .in("formula_id", pendingFormulaIds)
       : Promise.resolve({ data: [] as { formula_id: string; item_id: string; quantity: number }[] }),
   ]);
 
+  const pendingSkuIds = [
+    ...new Set(pendingOrders.map((o) => o.sku_id).filter(Boolean) as string[]),
+  ];
+  const { data: packagingLineRows } = pendingSkuIds.length
+    ? await supabase
+        .from("sku_packaging_lines")
+        .select("packaging_id, item_id, quantity, quantity_basis")
+        .in("packaging_id", pendingSkuIds)
+    : { data: [] as { packaging_id: string; item_id: string; quantity: number; quantity_basis: string }[] };
+
   const batchItemIds = (batchLineRows ?? []).map((l) => l.item_id);
   const formulaItemIds = (formulaLineRows ?? []).map((l) => l.item_id);
-  const allItemIds = [...new Set([...batchItemIds, ...formulaItemIds])];
+  const packagingItemIds = (packagingLineRows ?? []).map((l) => l.item_id);
+  const allItemIds = [
+    ...new Set([...batchItemIds, ...formulaItemIds, ...packagingItemIds]),
+  ];
   const clientIds = [...new Set(pendingOrders.map((o) => o.client_id))];
 
   const { data: invRows } = allItemIds.length
@@ -146,6 +168,14 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
     (linesByFormula[line.formula_id] ??= []).push(line);
   }
 
+  const linesBySku: Record<
+    string,
+    { item_id: string; quantity: number; quantity_basis: string }[]
+  > = {};
+  for (const line of packagingLineRows ?? []) {
+    (linesBySku[line.packaging_id] ??= []).push(line);
+  }
+
   const materialStatus: Record<string, MaterialStatus> = {};
   for (const order of pendingOrders) {
     const batchId = batchIdForOrder[order.id];
@@ -159,29 +189,55 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
       continue;
     }
 
-    // Fall back to formula lines scaled to the ordered quantity
+    // Fall back to formula ingredients + SKU packaging scaled to ordered qty
     const formulaId = order.formula_id;
     const baseQty = order.formulas?.base_quantity;
     const baseUom = order.formulas?.base_unit_of_measure ?? "";
     const formulaLines = formulaId ? (linesByFormula[formulaId] ?? []) : [];
+    const packagingLines = order.sku_id
+      ? (linesBySku[order.sku_id] ?? [])
+      : [];
 
-    if (formulaLines.length === 0 || !baseQty) {
+    if ((formulaLines.length === 0 && packagingLines.length === 0) || !baseQty) {
       materialStatus[order.id] = "unknown";
       continue;
     }
 
-    const orderGallons = toGallons(order.ordered_quantity, order.unit_of_measure);
-    const baseGallons = toGallons(baseQty, baseUom);
+    const skuPackaging = Array.isArray(order.skus?.sku_packaging)
+      ? order.skus?.sku_packaging[0]
+      : order.skus?.sku_packaging;
+    const cansPerTray = skuPackaging?.cans_per_tray ?? 24;
+    const orderGallons = toGallons(
+      order.ordered_quantity,
+      order.unit_of_measure,
+      cansPerTray,
+    );
+    const baseGallons = toGallons(baseQty, baseUom, cansPerTray);
     if (orderGallons === null || baseGallons === null || baseGallons === 0) {
       materialStatus[order.id] = "unknown";
       continue;
     }
 
     const scale = orderGallons / baseGallons;
-    const hasShortage = formulaLines.some(
-      (line) => (invAvail[`${order.client_id}:${line.item_id}`] ?? 0) < Number(line.quantity) * scale
+    const filledCans = Math.ceil(
+      (orderGallons * 128) / 12,
     );
-    materialStatus[order.id] = hasShortage ? "short" : "sufficient";
+    const ingredientShort = formulaLines.some(
+      (line) =>
+        (invAvail[`${order.client_id}:${line.item_id}`] ?? 0) <
+        Number(line.quantity) * scale,
+    );
+    const packagingShort = packagingLines.some((line) => {
+      const required = packagingRequiredQty(
+        Number(line.quantity),
+        line.quantity_basis,
+        filledCans,
+        cansPerTray,
+      );
+      return (invAvail[`${order.client_id}:${line.item_id}`] ?? 0) < required;
+    });
+    materialStatus[order.id] =
+      ingredientShort || packagingShort ? "short" : "sufficient";
   }
 
   return (
@@ -394,12 +450,43 @@ function Filters({
   );
 }
 
-function toGallons(qty: number, uom: string): number | null {
+function toGallons(
+  qty: number,
+  uom: string,
+  cansPerTray: number = 24,
+): number | null {
   switch (uom.toLowerCase()) {
-    case "gal": case "gallon": case "gallons": return qty;
-    case "can": case "cans": return qty * 12 / 128;
-    case "case": case "cases": return qty * 24 * 12 / 128;
-    default: return null;
+    case "gal":
+    case "gallon":
+    case "gallons":
+      return qty;
+    case "can":
+    case "cans":
+      return (qty * 12) / 128;
+    case "case":
+    case "cases":
+      return (qty * cansPerTray * 12) / 128;
+    default:
+      return null;
+  }
+}
+
+function packagingRequiredQty(
+  quantity: number,
+  basis: string,
+  filledCans: number,
+  cansPerTray: number,
+) {
+  switch (basis) {
+    case "per_can":
+      return Math.ceil(filledCans * quantity);
+    case "per_tray":
+    case "per_case":
+      return Math.ceil(Math.ceil(filledCans / cansPerTray) * quantity);
+    case "per_unit":
+      return Math.ceil(quantity);
+    default:
+      return Math.ceil(filledCans * quantity);
   }
 }
 

@@ -79,7 +79,18 @@ export function EditableSku({
       return;
     }
     const selectedSku = allClientSkus.find((s) => s.id === skuId);
-    setCurrentLinkedSkus(selectedSku ? [selectedSku] : []);
+    setCurrentLinkedSkus(
+      selectedSku
+        ? [
+            {
+              id: selectedSku.id,
+              code: selectedSku.code,
+              name: selectedSku.name,
+              shelf_life_days: selectedSku.shelf_life_days,
+            },
+          ]
+        : [],
+    );
     setSaving(false);
     setIsEditing(false);
   }

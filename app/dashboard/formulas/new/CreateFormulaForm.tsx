@@ -25,7 +25,12 @@ import {
   type QuantityBasis,
 } from "../shared";
 import { createDocumentRecord } from "../../documents/actions";
-import { updateFormulaSpecs, type FormulaSpecInput } from "../[id]/actions";
+import {
+  updateFormulaSpecs,
+  updateSkuPackaging,
+  type FormulaSpecInput,
+  type SkuPackagingLineInput,
+} from "../[id]/actions";
 import {
   createClientRecord,
   createFormula,
@@ -40,8 +45,6 @@ import {
 // ---------------------------------------------------------------------------
 
 type ClientOption = { id: string; name: string; code: string };
-
-type ArtworkDraft = { key: string; file: File };
 
 const STATUSES: { value: "draft" | "pending_authorization"; label: string }[] = [
   { value: "draft", label: "Draft" },
@@ -192,6 +195,9 @@ export function CreateFormulaForm({
     Record<string, string>
   >({});
   const [pendingSpecs, setPendingSpecs] = useState<FormulaSpecInput[]>([]);
+  const [pendingPackagingLines, setPendingPackagingLines] = useState<
+    SkuPackagingLineInput[]
+  >([]);
 
   // Formula sheet import
   const [formulaSheetFile, setFormulaSheetFile] = useState<File | null>(null);
@@ -200,7 +206,7 @@ export function CreateFormulaForm({
 
   // Documents
   const [paLetterFile, setPaLetterFile] = useState<File | null>(null);
-  const [artworkFiles, setArtworkFiles] = useState<ArtworkDraft[]>([]);
+  const [artworkFile, setArtworkFile] = useState<File | null>(null);
 
   // Submit state
   const [submitting, setSubmitting] = useState(false);
@@ -314,18 +320,46 @@ export function CreateFormulaForm({
         .map(normalizeExtractedLine)
         .filter((l): l is NonNullable<typeof l> => l != null);
 
-      if (validLines.length > 0) {
+      const ingredientLines = validLines.filter((l) => l.lineType === "ingredient");
+      const packagingExtracted = validLines.filter((l) => l.lineType === "packaging");
+
+      const nextPackaging: SkuPackagingLineInput[] = [];
+      for (const l of packagingExtracted) {
+        const itemId = l.itemDescription
+          ? matchItem(l.itemDescription, "packaging")
+          : "";
+        if (!itemId) continue;
+        const matchedItem = allItems.find((i) => i.id === itemId);
+        const isTray = (l.itemDescription ?? "").toLowerCase().includes("tray");
+        nextPackaging.push({
+          itemId,
+          quantity: Number(l.quantity),
+          unitOfMeasure:
+            l.unitOfMeasure || matchedItem?.unit_of_measure || "each",
+          quantityBasis: isTray
+            ? "per_tray"
+            : l.quantityBasis === "per_can"
+              ? "per_can"
+              : "per_unit",
+        });
+      }
+      setPendingPackagingLines(nextPackaging);
+      if (nextPackaging.length > 0) {
+        notes.push(`${nextPackaging.length} packaging component(s)`);
+      }
+
+      if (ingredientLines.length > 0) {
         // Replace existing lines — re-extract should refresh, not duplicate.
-        const newLines: LineDraft[] = validLines.map((l) => {
+        const newLines: LineDraft[] = ingredientLines.map((l) => {
           const itemId = l.itemDescription
-            ? matchItem(l.itemDescription, l.lineType)
+            ? matchItem(l.itemDescription, "ingredient")
             : "";
           const matchedItem = itemId
             ? allItems.find((i) => i.id === itemId)
             : null;
           return {
             key: randomId(),
-            lineType: l.lineType,
+            lineType: "ingredient" as const,
             itemId,
             quantity: l.quantity,
             unitOfMeasure:
@@ -337,7 +371,7 @@ export function CreateFormulaForm({
         });
 
         const descMap: Record<string, string> = {};
-        validLines.forEach((l, i) => {
+        ingredientLines.forEach((l, i) => {
           if (l.itemDescription && newLines[i]) {
             descMap[newLines[i].key] = l.itemDescription;
           }
@@ -461,14 +495,16 @@ export function CreateFormulaForm({
     }
 
     setLines(
-      data.map((line) => ({
-        key: line.id,
-        lineType: line.line_type as LineType,
-        itemId: line.item_id,
-        quantity: String(line.quantity),
-        unitOfMeasure: line.unit_of_measure,
-        quantityBasis: line.quantity_basis as LineDraft["quantityBasis"],
-      }))
+      data
+        .filter((line) => line.line_type === "ingredient")
+        .map((line) => ({
+          key: line.id,
+          lineType: "ingredient" as const,
+          itemId: line.item_id,
+          quantity: String(line.quantity),
+          unitOfMeasure: line.unit_of_measure,
+          quantityBasis: line.quantity_basis as LineDraft["quantityBasis"],
+        })),
     );
   }
 
@@ -490,16 +526,6 @@ export function CreateFormulaForm({
 
   function addLine(lineType: LineType = "ingredient") {
     setLines((prev) => [...prev, newLineDraft(lineType)]);
-  }
-
-  // ── Artwork file management ──────────────────────────────────────────────
-
-  function addArtworkFile(file: File) {
-    setArtworkFiles((prev) => [...prev, { key: randomId(), file }]);
-  }
-
-  function removeArtworkFile(key: string) {
-    setArtworkFiles((prev) => prev.filter((a) => a.key !== key));
   }
 
   // ── Validation ────────────────────────────────────────────────────────────
@@ -540,15 +566,16 @@ export function CreateFormulaForm({
         paLetter = { fileName: paLetterFile.name, storagePath: path };
       }
 
-      const artworkUploads = await Promise.all(
-        artworkFiles.map(async ({ file }) => {
-          const uuid = randomId();
-          const path = `${clientId}/artwork/${uuid}/${file.name}`;
-          const { error } = await supabase.storage.from("documents").upload(path, file);
-          if (error) throw new Error(error.message);
-          return { fileName: file.name, storagePath: path };
-        })
-      );
+      let artwork: { fileName: string; storagePath: string } | null = null;
+      if (artworkFile) {
+        const uuid = randomId();
+        const path = `${clientId}/artwork/${uuid}/${artworkFile.name}`;
+        const { error } = await supabase.storage
+          .from("documents")
+          .upload(path, artworkFile);
+        if (error) throw new Error(error.message);
+        artwork = { fileName: artworkFile.name, storagePath: path };
+      }
 
       const result = await createFormula({
         clientId,
@@ -559,15 +586,17 @@ export function CreateFormulaForm({
         baseUnitOfMeasure: baseUnitOfMeasure.trim(),
         batchingInstructions: batchingInstructions.trim() || null,
         status,
-        lines: lines.map((l) => ({
-          itemId: l.itemId,
-          lineType: l.lineType,
-          quantity: Number(l.quantity),
-          unitOfMeasure: l.unitOfMeasure.trim(),
-          quantityBasis: l.quantityBasis,
-        })),
+        lines: lines
+          .filter((l) => l.lineType === "ingredient")
+          .map((l) => ({
+            itemId: l.itemId,
+            lineType: "ingredient" as const,
+            quantity: Number(l.quantity),
+            unitOfMeasure: l.unitOfMeasure.trim(),
+            quantityBasis: l.quantityBasis,
+          })),
         paLetter,
-        artworkFiles: artworkUploads,
+        artworkFiles: artwork ? [artwork] : [],
       });
 
       if (!result.success) {
@@ -576,6 +605,33 @@ export function CreateFormulaForm({
       }
 
       const postCreateWarnings: string[] = [];
+
+      if (skuId && pendingPackagingLines.length > 0) {
+        const packagingResult = await updateSkuPackaging({
+          skuId,
+          formulaId: result.id,
+          header: {
+            cansPerTray: 24,
+            canSizeOz: 12,
+            canType: "sleek",
+            lidColor: "silver",
+            secondaryPackaging: "none",
+            trayNotes: null,
+            lidNotes: null,
+            notes: null,
+          },
+          lines: pendingPackagingLines,
+        });
+        if (!packagingResult.success) {
+          postCreateWarnings.push(
+            `packaging failed to save: ${packagingResult.error}`,
+          );
+        }
+      } else if (!skuId && pendingPackagingLines.length > 0) {
+        postCreateWarnings.push(
+          "packaging components were extracted but no SKU was linked — add them under Packaging on the formula detail",
+        );
+      }
 
       if (formulaSheetFile) {
         try {
@@ -887,10 +943,14 @@ export function CreateFormulaForm({
             <Button type="button" variant="outline" size="sm" onClick={() => addLine("ingredient")}>
               + Add Ingredient Line
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => addLine("packaging")}>
-              + Add Packaging Line
-            </Button>
           </div>
+          {pendingPackagingLines.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {pendingPackagingLines.length} packaging component
+              {pendingPackagingLines.length !== 1 ? "s" : ""} from the sheet
+              will be saved to the linked SKU on create.
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -939,42 +999,41 @@ export function CreateFormulaForm({
 
           <div className="flex flex-col gap-2">
             <Label>Can Artwork</Label>
-            {artworkFiles.map((a) => (
-              <div key={a.key} className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm">
-                <span className="font-mono truncate flex-1">{a.file.name}</span>
+            {artworkFile ? (
+              <div className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                <span className="font-mono truncate flex-1">{artworkFile.name}</span>
                 <button
                   type="button"
-                  onClick={() => removeArtworkFile(a.key)}
+                  onClick={() => setArtworkFile(null)}
                   className="text-xs text-muted-foreground hover:text-destructive"
                 >
                   Remove
                 </button>
               </div>
-            ))}
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-              <Label
-                htmlFor="artwork-file"
-                className="cursor-pointer flex flex-1 items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
-              >
-                <span>+ Add artwork file (PDF or PNG) — optional</span>
-                <input
-                  id="artwork-file"
-                  type="file"
-                  className="sr-only"
-                  accept=".pdf,image/png,image/jpeg"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) addArtworkFile(file);
-                    e.target.value = "";
+            ) : (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                <Label
+                  htmlFor="artwork-file"
+                  className="cursor-pointer flex flex-1 items-center gap-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground hover:border-foreground/30 hover:text-foreground transition-colors"
+                >
+                  <span>Upload artwork (PDF or PNG) — optional</span>
+                  <input
+                    id="artwork-file"
+                    type="file"
+                    className="sr-only"
+                    accept=".pdf,image/png,image/jpeg"
+                    onChange={(e) =>
+                      setArtworkFile(e.target.files?.[0] ?? null)
+                    }
+                  />
+                </Label>
+                <GoogleDrivePickerButton
+                  onFile={(file) => {
+                    setArtworkFile(file);
                   }}
                 />
-              </Label>
-              <GoogleDrivePickerButton
-                onFile={(file) => {
-                  addArtworkFile(file);
-                }}
-              />
-            </div>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

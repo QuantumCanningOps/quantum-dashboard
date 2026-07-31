@@ -32,6 +32,51 @@ export type SkuOption = {
   formula_id?: string | null;
 };
 
+export const DEFAULT_CANS_PER_TRAY = 24;
+export const DEFAULT_CAN_SIZE_OZ = 12;
+export const DEFAULT_CAN_TYPE = "sleek" as const;
+export const DEFAULT_LID_COLOR = "silver";
+
+export type CanType = "sleek" | "slim" | "standard";
+export type SecondaryPackaging =
+  | "none"
+  | "quad_pak"
+  | "carton"
+  | "box"
+  | "other";
+export type PackagingQuantityBasis =
+  | "per_can"
+  | "per_tray"
+  | "per_case"
+  | "per_unit";
+
+export const CAN_TYPES: { value: CanType; label: string }[] = [
+  { value: "sleek", label: "Sleek" },
+  { value: "slim", label: "Slim" },
+  { value: "standard", label: "Standard" },
+];
+
+export const SECONDARY_PACKAGING_OPTIONS: {
+  value: SecondaryPackaging;
+  label: string;
+}[] = [
+  { value: "none", label: "None" },
+  { value: "quad_pak", label: "Quad-pak" },
+  { value: "carton", label: "Carton" },
+  { value: "box", label: "Box" },
+  { value: "other", label: "Other" },
+];
+
+export const PACKAGING_QUANTITY_BASES: {
+  value: PackagingQuantityBasis;
+  label: string;
+}[] = [
+  { value: "per_can", label: "Per can" },
+  { value: "per_tray", label: "Per tray" },
+  { value: "per_case", label: "Per case" },
+  { value: "per_unit", label: "Per unit" },
+];
+
 export type LineType = "ingredient" | "packaging";
 export type QuantityBasis = "per_batch" | "per_can" | "percentage";
 export type ItemType = "raw_ingredient" | "packaging" | "wip" | "finished_good";

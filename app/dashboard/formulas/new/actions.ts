@@ -142,7 +142,7 @@ Rules:
 - Extract density (lbs/gal) into densityLbsPerGallon and Water (lbs/gal) into waterLbsPerGallon when shown. Target Weight uses product density, not water density.
 - If only weight/volume per batch is available (no %), use quantityBasis "per_batch" with that quantity and its unit (e.g. lbs).
 - Skip total/100% summary rows and blank rows.
-- lineType is usually "ingredient"; use "packaging" only for packaging materials.
+- lineType is usually "ingredient"; use "packaging" only for packaging materials (cans, lids/ends, trays). Packaging lines are saved to the SKU packaging BOM, not formula lines.
 - Parse specs like "2.50-2.60" into minValue/maxValue, and "11.8+/-0.2" into targetValue 11.8 with min/max 11.6/12.0.
 - Normalize units to lowercase common forms (gallons, lbs, oz, %).
 - Omit any field you cannot clearly identify.`;
@@ -273,6 +273,7 @@ export async function createSkuRecord(data: {
   } = await supabase.auth.getUser();
   if (!user) return { error: "Not authenticated" };
 
+  // sku_packaging row is created by DB trigger skus_ensure_packaging
   const { data: sku, error } = await supabase
     .from("skus")
     .insert({
