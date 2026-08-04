@@ -36,6 +36,27 @@ export async function updateBatchingInstructions(
   return { success: true };
 }
 
+export async function updateFormulaDensity(
+  formulaId: string,
+  densityLbsPerGallon: number
+): Promise<ActionResult> {
+  const { supabase, user } = await requireInternalUser();
+  if (!user) return { success: false, error: "Not authenticated" };
+  if (!(densityLbsPerGallon > 0)) {
+    return { success: false, error: "Density must be greater than zero" };
+  }
+
+  const { error } = await supabase
+    .from("formulas")
+    .update({ density_lbs_per_gallon: densityLbsPerGallon })
+    .eq("id", formulaId);
+
+  if (error) return { success: false, error: error.message };
+
+  revalidatePath(`/dashboard/formulas/${formulaId}`);
+  return { success: true };
+}
+
 // ---------------------------------------------------------------------------
 // SKU link
 // ---------------------------------------------------------------------------
@@ -175,4 +196,48 @@ export async function updateFormulaSpecs(
 
   revalidatePath(`/dashboard/formulas/${formulaId}`);
   return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// Delete formula
+// ---------------------------------------------------------------------------
+
+export async function deleteFormula(
+  formulaId: string
+): Promise<
+  | { success: true; clientId: string }
+  | { success: false; error: string }
+> {
+  const { supabase, user } = await requireInternalUser();
+  if (!user) return { success: false, error: "Not authenticated" };
+
+  const { data, error } = await supabase.rpc("delete_formula", {
+    p_formula_id: formulaId,
+  });
+  if (error) return { success: false, error: error.message };
+
+  const result = data as {
+    clientId?: string;
+    documents?: Array<{ id?: string; storagePath?: string | null }>;
+  } | null;
+
+  const clientId = result?.clientId;
+  if (!clientId) {
+    return { success: false, error: "Formula delete did not return a client id" };
+  }
+
+  const storagePaths = (result.documents ?? [])
+    .map((doc) => doc.storagePath)
+    .filter((path): path is string => Boolean(path));
+  if (storagePaths.length > 0) {
+    await supabase.storage.from("documents").remove(storagePaths);
+  }
+
+  revalidatePath(`/dashboard/formulas/${formulaId}`);
+  revalidatePath(`/dashboard/clients/${clientId}`);
+  revalidatePath("/dashboard/clients");
+  revalidatePath("/dashboard/documents");
+  revalidatePath("/dashboard/needs-attention");
+
+  return { success: true, clientId };
 }

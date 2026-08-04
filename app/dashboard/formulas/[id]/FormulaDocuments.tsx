@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Badge } from "@/components/ui/badge";
@@ -22,8 +21,19 @@ export type FormulaDocument = {
   file_name: string;
   uploaded_at: string;
   artwork_status: string | null;
-  previewUrl?: string | null;
 };
+
+function formatUploadedDate(iso: string) {
+  // Stable across SSR/CSR: avoid toLocaleDateString() timezone/locale mismatches.
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", { timeZone: "UTC" });
+}
+
+function documentViewUrl(doc: Pick<FormulaDocument, "id" | "uploaded_at">) {
+  // Include uploaded_at so replace uploads bust the browser cache.
+  return `/dashboard/documents/${doc.id}/view?v=${encodeURIComponent(doc.uploaded_at)}`;
+}
 
 function isImageFile(fileName: string) {
   return /\.(png|jpe?g|gif|webp|bmp)$/i.test(fileName);
@@ -82,7 +92,7 @@ function DocumentRow({ doc }: { doc: FormulaDocument }) {
           )}
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Uploaded {new Date(doc.uploaded_at).toLocaleDateString()}
+          Uploaded {formatUploadedDate(doc.uploaded_at)}
         </p>
       </div>
       <DocumentActions doc={doc} />
@@ -91,31 +101,29 @@ function DocumentRow({ doc }: { doc: FormulaDocument }) {
 }
 
 function ArtworkPreviewCard({ doc }: { doc: FormulaDocument }) {
-  const previewUrl = doc.previewUrl ?? null;
-  const imagePreview =
-    previewUrl && isImageFile(doc.file_name) ? previewUrl : null;
-  const pdfPreview =
-    previewUrl && isPdfFile(doc.file_name) ? previewUrl : null;
+  const previewUrl = documentViewUrl(doc);
+  const showImage = isImageFile(doc.file_name);
+  const showPdf = isPdfFile(doc.file_name);
 
   return (
     <div className="overflow-hidden rounded-md border bg-muted/30">
-      {imagePreview && (
+      {showImage && (
         <Link
-          href={`/dashboard/documents/${doc.id}/view`}
+          href={previewUrl}
           target="_blank"
           rel="noopener noreferrer"
           className="block bg-white"
         >
           <img
-            src={imagePreview}
+            src={previewUrl}
             alt={`Can artwork: ${doc.file_name}`}
             className="mx-auto max-h-96 w-full object-contain"
           />
         </Link>
       )}
-      {pdfPreview && (
+      {showPdf && (
         <iframe
-          src={pdfPreview}
+          src={previewUrl}
           title={`Can artwork: ${doc.file_name}`}
           className="h-96 w-full bg-white"
         />
@@ -127,7 +135,7 @@ function ArtworkPreviewCard({ doc }: { doc: FormulaDocument }) {
             <ArtworkStatusBadge status={doc.artwork_status} />
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Uploaded {new Date(doc.uploaded_at).toLocaleDateString()}
+            Uploaded {formatUploadedDate(doc.uploaded_at)}
           </p>
         </div>
         <DocumentActions doc={doc} />
@@ -149,7 +157,6 @@ function FormulaDocUpload({
   label: string;
   replaceDocumentId?: string;
 }) {
-  const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -191,7 +198,6 @@ function FormulaDocUpload({
       }
 
       setFile(null);
-      router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed");
     } finally {
