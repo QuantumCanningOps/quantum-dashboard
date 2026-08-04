@@ -406,9 +406,15 @@ async function getInventoryAvailability(
   }
 
   const [{ data: inventory }, { data: openOrders }] = await Promise.all([
+    // inventory_on_hand.client_id comes from the lot, not the item — items
+    // can be (mis)referenced across clients (items.client_id is nullable and
+    // not enforced against the formula/SKU using them), so on-hand must be
+    // scoped to this client explicitly or another client's stock of the same
+    // item_id counts as "available" here.
     supabase
       .from("inventory_on_hand")
       .select("item_id, unit_of_measure, quantity_on_hand, is_offsite")
+      .eq("client_id", clientId)
       .in("item_id", itemIds),
     // Every open order's reservation — there's no order in progress here
     // (this is the "if I started a batch right now" calculator), so unlike
