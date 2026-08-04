@@ -5,8 +5,11 @@ import Link from "next/link";
 import {
   availableQuantityForItem,
   buildScaledRequirements,
+  freeQuantityForOrder,
+  reservedQuantityForItem,
   type IngredientQuantityBasis,
   type InventoryAvailabilityRow,
+  type ReservationLine,
 } from "@/lib/material-readiness";
 
 type RawBatchLine = {
@@ -37,7 +40,9 @@ type MaterialLine = {
   item_name: string;
   item_type: string;
   required: number;
-  available: number;
+  onHand: number;
+  reservedOther: number;
+  freeForOrder: number;
   uom: string;
   sufficient: boolean;
 };
@@ -83,12 +88,17 @@ export async function MaterialReadinessCard({ orderId }: Props) {
   };
 
   const activeBatch =
+    (order.batches ?? []).find((b) =>
+      b.status === "draft" ||
+      b.status === "scheduled" ||
+      b.status === "in_progress",
+    ) ??
     (order.batches ?? []).find((b) => b.status !== "cancelled") ??
-    (order.batches ?? [])[0] ??
     null;
 
   const [
     { data: batchLineRows },
+    { data: openOrderRows },
     { data: formulaLineRows },
     { data: packagingLineRows },
   ] = await Promise.all([
@@ -100,6 +110,16 @@ export async function MaterialReadinessCard({ orderId }: Props) {
           )
           .eq("batch_id", activeBatch.id)
       : Promise.resolve({ data: [] as RawBatchLine[] }),
+    // Other open orders' batch lines — source of "reserved elsewhere".
+    // Do not use inventory_item_summary.quantity_reserved here: that view used
+    // to attach raw planned qty onto the on-hand UOM row (g reserved → "lbs").
+    supabase
+      .from("production_orders")
+      .select(
+        "id, batches(id, status, batch_lines(item_id, planned_quantity, unit_of_measure))",
+      )
+      .eq("client_id", order.client_id)
+      .in("status", ["pending", "scheduled", "in_progress"]),
     order.formula_id
       ? supabase
           .from("formula_lines")
@@ -120,6 +140,42 @@ export async function MaterialReadinessCard({ orderId }: Props) {
   ]);
 
   const useBatchLines = ((batchLineRows ?? []) as RawBatchLine[]).length > 0;
+
+  const otherReservationLines: ReservationLine[] = [];
+  for (const openOrder of (openOrderRows ?? []) as {
+    id: string;
+    batches:
+      | {
+          id: string;
+          status: string;
+          batch_lines:
+            | {
+                item_id: string;
+                planned_quantity: number;
+                unit_of_measure: string;
+              }[]
+            | null;
+        }[]
+      | null;
+  }[]) {
+    if (openOrder.id === order.id) continue;
+    for (const batch of openOrder.batches ?? []) {
+      if (
+        batch.status !== "draft" &&
+        batch.status !== "scheduled" &&
+        batch.status !== "in_progress"
+      ) {
+        continue;
+      }
+      for (const line of batch.batch_lines ?? []) {
+        otherReservationLines.push({
+          itemId: line.item_id,
+          quantity: Number(line.planned_quantity),
+          unitOfMeasure: line.unit_of_measure,
+        });
+      }
+    }
+  }
 
   let rawLines: {
     item_id: string;
@@ -214,12 +270,14 @@ export async function MaterialReadinessCard({ orderId }: Props) {
         }[],
       };
 
-  const inventory: InventoryAvailabilityRow[] = (invRows ?? []).map((row) => ({
-    itemId: row.item_id,
-    itemName: row.item_name,
-    unitOfMeasure: row.unit_of_measure,
-    quantity: Number(row.quantity_on_hand),
-  }));
+  const onHandInventory: InventoryAvailabilityRow[] = (invRows ?? []).map(
+    (row) => ({
+      itemId: row.item_id,
+      itemName: row.item_name,
+      unitOfMeasure: row.unit_of_measure,
+      quantity: Number(row.quantity_on_hand),
+    }),
+  );
 
   const TYPE_ORDER: Record<string, number> = {
     raw_ingredient: 0,
@@ -231,16 +289,24 @@ export async function MaterialReadinessCard({ orderId }: Props) {
 
   const lines: MaterialLine[] = rawLines
     .map((line) => {
-      const available = availableQuantityForItem(
-        inventory,
+      const onHand = availableQuantityForItem(
+        onHandInventory,
         line.item_id,
         line.uom,
         line.item_name,
       );
+      const reservedOther = reservedQuantityForItem(
+        otherReservationLines,
+        line.item_id,
+        line.uom,
+      );
+      const freeForOrder = freeQuantityForOrder({ onHand, reservedOther });
       return {
         ...line,
-        available,
-        sufficient: available >= line.required,
+        onHand,
+        reservedOther,
+        freeForOrder,
+        sufficient: freeForOrder >= line.required,
       };
     })
     .sort((a, b) => {
@@ -258,8 +324,8 @@ export async function MaterialReadinessCard({ orderId }: Props) {
           <CardTitle className="text-base">Material readiness</CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">
             {useBatchLines
-              ? "Requirements from the batch bill of materials."
-              : "Requirements calculated from formula, scaled to ordered quantity."}
+              ? "Requirements from the batch bill of materials. Available is on hand minus materials reserved by other open orders."
+              : "Requirements calculated from formula, scaled to ordered quantity. Available is on hand minus materials reserved by other open orders."}
           </p>
         </div>
         {lines.length > 0 && (
@@ -290,15 +356,17 @@ export async function MaterialReadinessCard({ orderId }: Props) {
                   <th className="pb-2 text-left font-medium">Type</th>
                   <th className="pb-2 text-right font-medium">Required</th>
                   <th className="pb-2 text-right font-medium">On Hand</th>
-                  <th className="pb-2 text-right font-medium">Gap</th>
+                  <th className="pb-2 text-right font-medium">
+                    Reserved elsewhere
+                  </th>
+                  <th className="pb-2 text-right font-medium">Available</th>
                   <th className="pb-2 pl-4 text-left font-medium">Status</th>
                 </tr>
               </thead>
               <tbody>
                 {lines.map((line) => {
-                  const gap = line.available - line.required;
                   const showUnlimited =
-                    line.available >= Number.MAX_SAFE_INTEGER / 2;
+                    line.onHand >= Number.MAX_SAFE_INTEGER / 2;
                   return (
                     <tr
                       key={`${line.item_id}:${line.uom}`}
@@ -326,7 +394,7 @@ export async function MaterialReadinessCard({ orderId }: Props) {
                           </span>
                         ) : (
                           <>
-                            {fmtQty(line.available)}{" "}
+                            {fmtQty(line.onHand)}{" "}
                             <span className="text-muted-foreground">
                               {line.uom}
                             </span>
@@ -335,15 +403,32 @@ export async function MaterialReadinessCard({ orderId }: Props) {
                       </td>
                       <td className="py-2 pr-4 text-right tabular-nums">
                         {showUnlimited ? (
-                          <span className="text-green-700">—</span>
+                          <span className="text-muted-foreground">—</span>
+                        ) : line.reservedOther > 0 ? (
+                          <span className="text-amber-700">
+                            {fmtQty(line.reservedOther)}{" "}
+                            <span className="font-normal text-muted-foreground">
+                              {line.uom}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-4 text-right tabular-nums">
+                        {showUnlimited ? (
+                          <span className="text-muted-foreground">—</span>
                         ) : (
                           <span
                             className={
-                              gap >= 0 ? "text-green-700" : "text-red-600"
+                              line.freeForOrder < line.required
+                                ? "text-red-600"
+                                : line.reservedOther > 0
+                                  ? "text-green-700"
+                                  : undefined
                             }
                           >
-                            {gap >= 0 ? "+" : ""}
-                            {fmtQty(gap)}{" "}
+                            {fmtQty(line.freeForOrder)}{" "}
                             <span className="font-normal text-muted-foreground">
                               {line.uom}
                             </span>

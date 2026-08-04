@@ -2,6 +2,10 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import {
+  cancelDraftBatchReservations,
+  syncDraftBatchReservations,
+} from "@/lib/production-order-reservations";
 
 export type CreateProductionOrderInput = {
   clientId: string;
@@ -12,6 +16,22 @@ export type CreateProductionOrderInput = {
   unitOfMeasure: string;
   notes: string | null;
 };
+
+function revalidateOrderPaths(args: {
+  orderId: string;
+  clientId: string;
+  formulaId: string;
+}) {
+  revalidatePath("/dashboard/production-orders");
+  revalidatePath(`/dashboard/production-orders/${args.orderId}/readiness`);
+  revalidatePath("/dashboard/production");
+  revalidatePath(`/dashboard/production/${args.orderId}`);
+  revalidatePath(`/dashboard/clients/${args.clientId}`);
+  revalidatePath(`/dashboard/formulas/${args.formulaId}`);
+  revalidatePath("/dashboard/inventory/summary");
+  revalidatePath("/dashboard/inventory");
+  revalidatePath("/dashboard/needs-attention");
+}
 
 export async function createProductionOrder(
   data: CreateProductionOrderInput,
@@ -95,11 +115,33 @@ export async function createProductionOrder(
     return { success: false, error: error.message };
   }
 
-  revalidatePath("/dashboard/production-orders");
-  revalidatePath("/dashboard/production");
-  revalidatePath(`/dashboard/clients/${clientId}`);
-  revalidatePath(`/dashboard/formulas/${formulaId}`);
-  revalidatePath("/dashboard/needs-attention");
+  const reservation = await syncDraftBatchReservations(supabase, {
+    orderId: order.id,
+    clientId,
+    skuId,
+    formulaId,
+    orderNumber,
+    orderedQuantity: data.orderedQuantity,
+    unitOfMeasure,
+    createdBy: user.id,
+  });
+
+  if (!reservation.ok) {
+    // No DELETE grant on production_orders — cancel instead of leaving a
+    // pending order without reservations.
+    await cancelDraftBatchReservations(supabase, order.id);
+    await supabase
+      .from("production_orders")
+      .update({ status: "cancelled" })
+      .eq("id", order.id);
+    return { success: false, error: reservation.error };
+  }
+
+  revalidateOrderPaths({
+    orderId: order.id,
+    clientId,
+    formulaId,
+  });
 
   return { success: true, id: order.id };
 }
@@ -173,7 +215,7 @@ export async function updateProductionOrder(
 
   const { data: existing, error: existingError } = await supabase
     .from("production_orders")
-    .select("id, client_id")
+    .select("id, client_id, status")
     .eq("id", id)
     .single();
 
@@ -230,13 +272,32 @@ export async function updateProductionOrder(
     return { success: false, error: error.message };
   }
 
-  revalidatePath("/dashboard/production-orders");
-  revalidatePath(`/dashboard/production-orders/${id}/readiness`);
-  revalidatePath("/dashboard/production");
-  revalidatePath(`/dashboard/production/${id}`);
-  revalidatePath(`/dashboard/clients/${existing.client_id}`);
-  revalidatePath(`/dashboard/formulas/${formulaId}`);
-  revalidatePath("/dashboard/needs-attention");
+  if (data.status === "cancelled" || data.status === "complete") {
+    const release = await cancelDraftBatchReservations(supabase, id);
+    if (!release.ok) {
+      return { success: false, error: release.error };
+    }
+  } else {
+    const reservation = await syncDraftBatchReservations(supabase, {
+      orderId: id,
+      clientId: existing.client_id,
+      skuId,
+      formulaId,
+      orderNumber,
+      orderedQuantity: data.orderedQuantity,
+      unitOfMeasure,
+      createdBy: user.id,
+    });
+    if (!reservation.ok) {
+      return { success: false, error: reservation.error };
+    }
+  }
+
+  revalidateOrderPaths({
+    orderId: id,
+    clientId: existing.client_id,
+    formulaId,
+  });
 
   return { success: true };
 }

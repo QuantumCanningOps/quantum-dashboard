@@ -438,8 +438,9 @@ async function ClientDetail({ params }: DetailPageProps) {
           <div>
             <CardTitle className="text-base">Inventory</CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
-              {inventoryRows.length} items · {withReservations} reserved
+              {inventoryRows.length} items · {withReservations} with reservations
               {overBooked > 0 && ` · ${overBooked} over-booked`}
+              {" · Available = On Hand − Reserved"}
             </p>
           </div>
           <ButtonLink href={`/dashboard/inventory/summary?clientId=${id}`}>
@@ -453,6 +454,8 @@ async function ClientDetail({ params }: DetailPageProps) {
                 <tr className="border-b text-muted-foreground">
                   <th className="pb-2 text-left font-medium">Item</th>
                   <th className="pb-2 text-left font-medium">Type</th>
+                  <th className="pb-2 text-right font-medium">On Hand</th>
+                  <th className="pb-2 text-right font-medium">Reserved</th>
                   <th className="pb-2 text-right font-medium">Available</th>
                 </tr>
               </thead>
@@ -466,6 +469,24 @@ async function ClientDetail({ params }: DetailPageProps) {
                     <td className="py-2 pr-4">
                       <ItemTypeBadge type={row.item_type} />
                     </td>
+                    <td className="py-2 pr-4 text-right tabular-nums">
+                      {Number(row.quantity_on_hand).toLocaleString()}{" "}
+                      <span className="font-normal text-muted-foreground">
+                        {row.unit_of_measure}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-4 text-right tabular-nums">
+                      {Number(row.quantity_reserved) > 0 ? (
+                        <span className="text-amber-700">
+                          {Number(row.quantity_reserved).toLocaleString()}{" "}
+                          <span className="font-normal text-muted-foreground">
+                            {row.unit_of_measure}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
                     <td className="py-2 text-right tabular-nums font-medium">
                       <AvailableQty row={row} />
                     </td>
@@ -474,7 +495,7 @@ async function ClientDetail({ params }: DetailPageProps) {
                 {inventoryRows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={3}
+                      colSpan={5}
                       className="py-8 text-center text-sm text-muted-foreground"
                     >
                       No inventory on hand

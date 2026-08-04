@@ -6,8 +6,11 @@ import { Suspense } from "react";
 import {
   availableQuantityForItem,
   buildScaledRequirements,
+  freeQuantityForOrder,
+  reservedQuantityForItem,
   type IngredientQuantityBasis,
   type InventoryAvailabilityRow,
+  type ReservationLine,
 } from "@/lib/material-readiness";
 
 type PageProps = {
@@ -191,32 +194,117 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
   ];
   const clientIds = [...new Set(pendingOrders.map((o) => o.client_id))];
 
-  // Use on-hand (not net-of-reservations) so readiness matches the formula
-  // batch scaler the operator just checked.
-  const { data: invRows } = allItemIds.length
-    ? await supabase
-        .from("inventory_item_summary")
-        .select("client_id, item_id, item_name, unit_of_measure, quantity_on_hand")
-        .in("item_id", allItemIds)
-        .in("client_id", clientIds)
-    : {
-        data: [] as {
-          client_id: string;
-          item_id: string;
-          item_name: string;
-          unit_of_measure: string;
-          quantity_on_hand: number;
-        }[],
-      };
+  // On-hand only from the summary. Reservations come from open batch_lines so
+  // UOM mismatches (e.g. reserved in g, on hand in lbs) convert correctly, and
+  // each order ignores its own reserve.
+  const [{ data: invRows }, { data: openReservationOrders }] = await Promise.all([
+    allItemIds.length
+      ? supabase
+          .from("inventory_item_summary")
+          .select(
+            "client_id, item_id, item_name, unit_of_measure, quantity_on_hand",
+          )
+          .in("item_id", allItemIds)
+          .in("client_id", clientIds)
+      : Promise.resolve({
+          data: [] as {
+            client_id: string;
+            item_id: string;
+            item_name: string;
+            unit_of_measure: string;
+            quantity_on_hand: number;
+          }[],
+        }),
+    clientIds.length
+      ? supabase
+          .from("production_orders")
+          .select(
+            "id, client_id, batches(id, status, batch_lines(item_id, planned_quantity, unit_of_measure))",
+          )
+          .in("client_id", clientIds)
+          .in("status", ["pending", "scheduled", "in_progress"])
+      : Promise.resolve({
+          data: [] as {
+            id: string;
+            client_id: string;
+            batches:
+              | {
+                  id: string;
+                  status: string;
+                  batch_lines:
+                    | {
+                        item_id: string;
+                        planned_quantity: number;
+                        unit_of_measure: string;
+                      }[]
+                    | null;
+                }[]
+              | null;
+          }[],
+        }),
+  ]);
 
-  const invByClient: Record<string, InventoryAvailabilityRow[]> = {};
+  const onHandByClient: Record<string, InventoryAvailabilityRow[]> = {};
   for (const row of invRows ?? []) {
-    (invByClient[row.client_id] ??= []).push({
+    (onHandByClient[row.client_id] ??= []).push({
       itemId: row.item_id,
       itemName: row.item_name,
       unitOfMeasure: row.unit_of_measure,
       quantity: Number(row.quantity_on_hand),
     });
+  }
+
+  const reservationsByOrder: Record<
+    string,
+    { clientId: string; lines: ReservationLine[] }
+  > = {};
+  for (const openOrder of (openReservationOrders ?? []) as {
+    id: string;
+    client_id: string;
+    batches:
+      | {
+          id: string;
+          status: string;
+          batch_lines:
+            | {
+                item_id: string;
+                planned_quantity: number;
+                unit_of_measure: string;
+              }[]
+            | null;
+        }[]
+      | null;
+  }[]) {
+    const lines: ReservationLine[] = [];
+    for (const batch of openOrder.batches ?? []) {
+      if (
+        batch.status !== "draft" &&
+        batch.status !== "scheduled" &&
+        batch.status !== "in_progress"
+      ) {
+        continue;
+      }
+      for (const line of batch.batch_lines ?? []) {
+        lines.push({
+          itemId: line.item_id,
+          quantity: Number(line.planned_quantity),
+          unitOfMeasure: line.unit_of_measure,
+        });
+      }
+    }
+    reservationsByOrder[openOrder.id] = {
+      clientId: openOrder.client_id,
+      lines,
+    };
+  }
+
+  function otherReservationLinesForOrder(orderId: string, clientId: string) {
+    const lines: ReservationLine[] = [];
+    for (const [id, entry] of Object.entries(reservationsByOrder)) {
+      if (id === orderId || entry.clientId !== clientId) continue;
+      lines.push(...entry.lines);
+    }
+    return lines;
   }
 
   const linesByBatch: Record<
@@ -301,17 +389,28 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
   for (const order of pendingOrders) {
     const batchId = batchIdForOrder[order.id];
     const batchLines = batchId ? (linesByBatch[batchId] ?? []) : [];
-    const clientInventory = invByClient[order.client_id] ?? [];
+    const onHandInventory = onHandByClient[order.client_id] ?? [];
+    const otherReservations = otherReservationLinesForOrder(
+      order.id,
+      order.client_id,
+    );
 
     if (batchLines.length > 0) {
       const hasShortage = batchLines.some((line) => {
-        const available = availableQuantityForItem(
-          clientInventory,
-          line.item_id,
-          line.unit_of_measure,
-          line.items?.name,
-        );
-        return available < Number(line.planned_quantity);
+        const freeForOrder = freeQuantityForOrder({
+          onHand: availableQuantityForItem(
+            onHandInventory,
+            line.item_id,
+            line.unit_of_measure,
+            line.items?.name,
+          ),
+          reservedOther: reservedQuantityForItem(
+            otherReservations,
+            line.item_id,
+            line.unit_of_measure,
+          ),
+        });
+        return freeForOrder < Number(line.planned_quantity);
       });
       materialStatus[order.id] = hasShortage ? "short" : "sufficient";
       continue;
@@ -370,15 +469,23 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
       continue;
     }
 
+    // No batch lines yet — this order reserves nothing; subtract other open work.
     const hasShortage = requirements.some((req) => {
       if (req.unlimited) return false;
-      const available = availableQuantityForItem(
-        clientInventory,
-        req.itemId,
-        req.unitOfMeasure,
-        req.itemName,
-      );
-      return available < req.required;
+      const freeForOrder = freeQuantityForOrder({
+        onHand: availableQuantityForItem(
+          onHandInventory,
+          req.itemId,
+          req.unitOfMeasure,
+          req.itemName,
+        ),
+        reservedOther: reservedQuantityForItem(
+          otherReservations,
+          req.itemId,
+          req.unitOfMeasure,
+        ),
+      });
+      return freeForOrder < req.required;
     });
     materialStatus[order.id] = hasShortage ? "short" : "sufficient";
   }

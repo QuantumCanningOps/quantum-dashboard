@@ -342,6 +342,55 @@ export function availableQuantityForItem(
   }, 0);
 }
 
+/**
+ * Stock free for this order: on-hand minus reservations from *other* open work.
+ * Pass reservedOther from other orders' batch lines — never subtract this
+ * order's own reserve from inventory_item_summary (that view can mis-label UOM).
+ */
+export function freeQuantityForOrder(args: {
+  onHand: number;
+  reservedOther: number;
+}): number {
+  if (args.onHand >= Number.MAX_SAFE_INTEGER / 2) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return args.onHand - Math.max(0, args.reservedOther);
+}
+
+export type ReservationLine = {
+  itemId: string;
+  quantity: number;
+  unitOfMeasure: string;
+};
+
+/**
+ * Convert and sum reservation lines for an item into the required UOM.
+ * Weight units convert; matching non-weight labels count; incompatible units
+ * are skipped (do not treat raw mismatched numbers as the same quantity).
+ */
+export function reservedQuantityForItem(
+  lines: ReservationLine[],
+  itemId: string,
+  requiredUnit: string,
+): number {
+  return lines.reduce((total, line) => {
+    if (line.itemId !== itemId) return total;
+    const converted = convertQuantity(
+      line.quantity,
+      line.unitOfMeasure,
+      requiredUnit,
+    );
+    if (converted !== null) return total + converted;
+    if (
+      line.unitOfMeasure.trim().toLowerCase() ===
+      requiredUnit.trim().toLowerCase()
+    ) {
+      return total + line.quantity;
+    }
+    return total;
+  }, 0);
+}
+
 export function requirementsAreSufficient(
   requirements: MaterialRequirement[],
   inventory: InventoryAvailabilityRow[],
