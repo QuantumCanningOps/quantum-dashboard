@@ -6,6 +6,7 @@ import {
   availableQuantityForItem,
   buildScaledRequirements,
   freeQuantityForOrder,
+  hasReservationPriority,
   reservedQuantityForItem,
   type IngredientQuantityBasis,
   type InventoryAvailabilityRow,
@@ -57,7 +58,7 @@ export async function MaterialReadinessCard({ orderId }: Props) {
   const { data: orderRow } = await supabase
     .from("production_orders")
     .select(
-      "id, client_id, formula_id, sku_id, ordered_quantity, unit_of_measure, skus(sku_packaging(cans_per_tray, can_size_oz)), formulas(base_quantity, base_unit_of_measure, density_lbs_per_gallon), batches(id, status)",
+      "id, client_id, formula_id, sku_id, ordered_quantity, unit_of_measure, created_at, skus(sku_packaging(cans_per_tray, can_size_oz)), formulas(base_quantity, base_unit_of_measure, density_lbs_per_gallon), batches(id, status)",
     )
     .eq("id", orderId)
     .single();
@@ -73,6 +74,7 @@ export async function MaterialReadinessCard({ orderId }: Props) {
     sku_id: string | null;
     ordered_quantity: number;
     unit_of_measure: string;
+    created_at: string;
     skus: {
       sku_packaging:
         | { cans_per_tray: number; can_size_oz: number | null }
@@ -116,7 +118,7 @@ export async function MaterialReadinessCard({ orderId }: Props) {
     supabase
       .from("production_orders")
       .select(
-        "id, batches(id, status, batch_lines(item_id, planned_quantity, unit_of_measure))",
+        "id, created_at, batches(id, status, batch_lines(item_id, planned_quantity, unit_of_measure))",
       )
       .eq("client_id", order.client_id)
       .in("status", ["pending", "scheduled", "in_progress"]),
@@ -144,6 +146,7 @@ export async function MaterialReadinessCard({ orderId }: Props) {
   const otherReservationLines: ReservationLine[] = [];
   for (const openOrder of (openOrderRows ?? []) as {
     id: string;
+    created_at: string;
     batches:
       | {
           id: string;
@@ -159,6 +162,17 @@ export async function MaterialReadinessCard({ orderId }: Props) {
       | null;
   }[]) {
     if (openOrder.id === order.id) continue;
+    // First-come-first-served: only orders created before this one hold a
+    // claim against it. Otherwise every order in a competing group counts
+    // every other one as "using up" the same stock and all show short.
+    if (
+      !hasReservationPriority(
+        { id: openOrder.id, createdAt: openOrder.created_at },
+        { id: order.id, createdAt: order.created_at },
+      )
+    ) {
+      continue;
+    }
     for (const batch of openOrder.batches ?? []) {
       if (
         batch.status !== "draft" &&
@@ -324,8 +338,8 @@ export async function MaterialReadinessCard({ orderId }: Props) {
           <CardTitle className="text-base">Material readiness</CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">
             {useBatchLines
-              ? "Requirements from the batch bill of materials. Available is on hand minus materials reserved by other open orders."
-              : "Requirements calculated from formula, scaled to ordered quantity. Available is on hand minus materials reserved by other open orders."}
+              ? "Requirements from the batch bill of materials. Available is on hand minus materials reserved by open orders created earlier."
+              : "Requirements calculated from formula, scaled to ordered quantity. Available is on hand minus materials reserved by open orders created earlier."}
           </p>
         </div>
         {lines.length > 0 && (
@@ -357,7 +371,7 @@ export async function MaterialReadinessCard({ orderId }: Props) {
                   <th className="pb-2 text-right font-medium">Required</th>
                   <th className="pb-2 text-right font-medium">On Hand</th>
                   <th className="pb-2 text-right font-medium">
-                    Reserved elsewhere
+                    Reserved by earlier orders
                   </th>
                   <th className="pb-2 text-right font-medium">Available</th>
                   <th className="pb-2 pl-4 text-left font-medium">Status</th>

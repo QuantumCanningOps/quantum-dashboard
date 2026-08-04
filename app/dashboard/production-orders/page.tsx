@@ -7,6 +7,7 @@ import {
   availableQuantityForItem,
   buildScaledRequirements,
   freeQuantityForOrder,
+  hasReservationPriority,
   reservedQuantityForItem,
   type IngredientQuantityBasis,
   type InventoryAvailabilityRow,
@@ -219,7 +220,7 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
       ? supabase
           .from("production_orders")
           .select(
-            "id, client_id, batches(id, status, batch_lines(item_id, planned_quantity, unit_of_measure))",
+            "id, client_id, created_at, batches(id, status, batch_lines(item_id, planned_quantity, unit_of_measure))",
           )
           .in("client_id", clientIds)
           .in("status", ["pending", "scheduled", "in_progress"])
@@ -227,6 +228,7 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
           data: [] as {
             id: string;
             client_id: string;
+            created_at: string;
             batches:
               | {
                   id: string;
@@ -256,11 +258,12 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
 
   const reservationsByOrder: Record<
     string,
-    { clientId: string; lines: ReservationLine[] }
+    { clientId: string; createdAt: string; lines: ReservationLine[] }
   > = {};
   for (const openOrder of (openReservationOrders ?? []) as {
     id: string;
     client_id: string;
+    created_at: string;
     batches:
       | {
           id: string;
@@ -294,14 +297,30 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
     }
     reservationsByOrder[openOrder.id] = {
       clientId: openOrder.client_id,
+      createdAt: openOrder.created_at,
       lines,
     };
   }
 
-  function otherReservationLinesForOrder(orderId: string, clientId: string) {
+  // First-come-first-served: only orders created before `order` hold a claim
+  // against it. Otherwise every order in a competing group counts every
+  // other one as "using up" the same stock and all show short.
+  function otherReservationLinesForOrder(order: {
+    id: string;
+    client_id: string;
+    created_at: string;
+  }) {
     const lines: ReservationLine[] = [];
     for (const [id, entry] of Object.entries(reservationsByOrder)) {
-      if (id === orderId || entry.clientId !== clientId) continue;
+      if (id === order.id || entry.clientId !== order.client_id) continue;
+      if (
+        !hasReservationPriority(
+          { id, createdAt: entry.createdAt },
+          { id: order.id, createdAt: order.created_at },
+        )
+      ) {
+        continue;
+      }
       lines.push(...entry.lines);
     }
     return lines;
@@ -390,10 +409,7 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
     const batchId = batchIdForOrder[order.id];
     const batchLines = batchId ? (linesByBatch[batchId] ?? []) : [];
     const onHandInventory = onHandByClient[order.client_id] ?? [];
-    const otherReservations = otherReservationLinesForOrder(
-      order.id,
-      order.client_id,
-    );
+    const otherReservations = otherReservationLinesForOrder(order);
 
     if (batchLines.length > 0) {
       const hasShortage = batchLines.some((line) => {

@@ -5,6 +5,7 @@
 - Creating a production order should reserve needed inventory so overlapping orders cannot claim the same stock; client inventory should show On Hand, Reserved, and Available with reserved + available = total.
 - Production-order material readiness must not treat that order’s own reservations as shortage or “reserved elsewhere.”
 - Every “available inventory” surface must net out other open orders’ reservations, not just show raw on-hand — this was missed on the formula batch scaler even after client inventory and per-order readiness were fixed, so check every page that renders an availability number when touching this feature, not just the two already-known ones.
+- Reservations among competing open orders are first-come-first-served by creation time, not symmetric: when N orders together overcommit an item, only the order(s) created last should show short, not all N. Nets each order's "reserved by others" down to just orders created *before* it (`hasReservationPriority` in `lib/material-readiness.ts`) — treating every other open order as a peer made every order in the group look short, since each one counted every sibling (including ones created after it) as competition.
 
 ## Learned Workspace Facts
 

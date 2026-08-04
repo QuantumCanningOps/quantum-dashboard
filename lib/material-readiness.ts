@@ -346,6 +346,11 @@ export function availableQuantityForItem(
  * Stock free for this order: on-hand minus reservations from *other* open work.
  * Pass reservedOther from other orders' batch lines — never subtract this
  * order's own reserve from inventory_item_summary (that view can mis-label UOM).
+ *
+ * reservedOther should only include orders that outrank this one (see
+ * hasReservationPriority) — otherwise every order in a competing group sees
+ * every other order as "using up" the same stock and all show short, instead
+ * of only the order(s) that actually don't fit once earlier claims are honored.
  */
 export function freeQuantityForOrder(args: {
   onHand: number;
@@ -355,6 +360,23 @@ export function freeQuantityForOrder(args: {
     return Number.MAX_SAFE_INTEGER;
   }
   return args.onHand - Math.max(0, args.reservedOther);
+}
+
+export type OrderPriorityKey = { id: string; createdAt: string };
+
+/**
+ * First-come-first-served claim on inventory: an order only "reserves ahead
+ * of" orders created after it, never ones created before it. `createdAt` is
+ * an ISO/timestamptz string (lexicographic compare is safe for that format);
+ * `id` breaks exact ties so the ordering is total (no two distinct orders
+ * both outrank each other, and none are mutually unranked).
+ */
+export function hasReservationPriority(
+  a: OrderPriorityKey,
+  b: OrderPriorityKey,
+): boolean {
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt;
+  return a.id < b.id;
 }
 
 export type ReservationLine = {
