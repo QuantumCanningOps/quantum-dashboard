@@ -20,17 +20,8 @@ type InventoryRow = {
   quantity_available: number;
 };
 
-const LOT_STATUSES = [
-  "released",
-  "quarantine",
-  "on_hold",
-  "consumed",
-  "destroyed",
-] as const;
-
 const RECENT_ORDERS_LIMIT = 20;
-const RECENT_LOTS_LIMIT = 25;
-const INVENTORY_PREVIEW_LIMIT = 15;
+const ACTIVE_LOT_STATUSES = ["quarantine", "released", "on_hold"] as const;
 
 export default function ClientDetailPage({ params }: DetailPageProps) {
   return (
@@ -52,26 +43,16 @@ async function ClientDetail({ params }: DetailPageProps) {
 
   if (!client) notFound();
 
-  const lotStatusCountQueries = LOT_STATUSES.map((status) =>
-    supabase
-      .from("lots")
-      .select("*", { count: "exact", head: true })
-      .eq("client_id", id)
-      .eq("status", status),
-  );
-
   const [
     { data: contacts },
     { data: skus },
-    { count: totalLotsCount },
-    { count: attentionLotsCount },
-    { data: recentLots },
     { data: openOrderRows },
     { count: openOrdersCount },
     { data: recentOrders },
     { count: totalOrdersCount },
     { data: inventory },
-    ...lotStatusCountResults
+    { data: activeLots },
+    { data: clientFormulas },
   ] = await Promise.all([
     supabase
       .from("contacts")
@@ -87,23 +68,6 @@ async function ClientDetail({ params }: DetailPageProps) {
       )
       .eq("client_id", id)
       .order("code"),
-    supabase
-      .from("lots")
-      .select("*", { count: "exact", head: true })
-      .eq("client_id", id),
-    supabase
-      .from("lots")
-      .select("*", { count: "exact", head: true })
-      .eq("client_id", id)
-      .in("status", ["quarantine", "on_hold"]),
-    supabase
-      .from("lots")
-      .select(
-        "id, lot_number, status, received_at, expiration_date, notes, items(name, item_type)",
-      )
-      .eq("client_id", id)
-      .order("received_at", { ascending: false })
-      .limit(RECENT_LOTS_LIMIT),
     supabase
       .from("production_orders")
       .select(
@@ -136,8 +100,47 @@ async function ClientDetail({ params }: DetailPageProps) {
       )
       .eq("client_id", id)
       .order("item_name"),
-    ...lotStatusCountQueries,
+    // Needs Attention — same rules as /dashboard/needs-attention (scoped to client)
+    supabase
+      .from("lots")
+      .select("id, items(requires_coa)")
+      .eq("client_id", id)
+      .in("status", [...ACTIVE_LOT_STATUSES]),
+    supabase
+      .from("formulas")
+      .select("id")
+      .eq("client_id", id)
+      .not("status", "eq", "retired"),
   ]);
+
+  const activeLotRows = activeLots ?? [];
+  const formulaRows = clientFormulas ?? [];
+  const activeLotIds = activeLotRows.map((lot) => lot.id);
+  const formulaIds = formulaRows.map((formula) => formula.id);
+
+  const [{ data: coaDocs }, { data: paDocs }, { data: unapprovedArtwork }] =
+    await Promise.all([
+      activeLotIds.length > 0
+        ? supabase
+            .from("documents")
+            .select("lot_id")
+            .eq("document_type", "coa")
+            .in("lot_id", activeLotIds)
+        : Promise.resolve({ data: [] as { lot_id: string }[] }),
+      formulaIds.length > 0
+        ? supabase
+            .from("documents")
+            .select("formula_id")
+            .eq("document_type", "pa_letter")
+            .in("formula_id", formulaIds)
+        : Promise.resolve({ data: [] as { formula_id: string }[] }),
+      supabase
+        .from("documents")
+        .select("id")
+        .eq("document_type", "artwork")
+        .eq("client_id", id)
+        .neq("artwork_status", "approved"),
+    ]);
 
   const openOrders = openOrderRows ?? [];
   const orderRows = recentOrders ?? [];
@@ -151,17 +154,25 @@ async function ClientDetail({ params }: DetailPageProps) {
     {} as Record<string, typeof openOrders>,
   );
 
-  const totalLots = totalLotsCount ?? 0;
-  const attentionCount = attentionLotsCount ?? 0;
-  const lotsByStatus = LOT_STATUSES.reduce(
-    (acc, status, index) => {
-      const count = lotStatusCountResults[index]?.count ?? 0;
-      if (count > 0) acc[status] = count;
-      return acc;
-    },
-    {} as Record<string, number>,
+  const lotIdsWithCoa = new Set(
+    (coaDocs ?? []).map((d) => d.lot_id as string),
   );
-  const clientLots = recentLots ?? [];
+  const formulaIdsWithPa = new Set(
+    (paDocs ?? []).map((d) => d.formula_id as string),
+  );
+
+  const missingCoaCount = activeLotRows.filter((lot) => {
+    const item = lot.items as unknown as { requires_coa: boolean } | null;
+    return item?.requires_coa === true && !lotIdsWithCoa.has(lot.id);
+  }).length;
+
+  const missingPaCount = formulaRows.filter(
+    (f) => !formulaIdsWithPa.has(f.id),
+  ).length;
+
+  const unapprovedArtworkCount = (unapprovedArtwork ?? []).length;
+  const attentionCount =
+    missingCoaCount + missingPaCount + unapprovedArtworkCount;
 
   const inventoryRows = [...((inventory ?? []) as InventoryRow[])].sort(
     (a, b) => {
@@ -178,7 +189,6 @@ async function ClientDetail({ params }: DetailPageProps) {
   const withReservations = inventoryRows.filter(
     (r) => r.quantity_reserved > 0,
   ).length;
-  const inventoryPreview = inventoryRows.slice(0, INVENTORY_PREVIEW_LIMIT);
 
   return (
     <div className="flex flex-col gap-6">
@@ -194,49 +204,17 @@ async function ClientDetail({ params }: DetailPageProps) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
         <StatCard label="SKUs" value={(skus ?? []).length} />
         <StatCard label="Open Orders" value={openOrderCount} />
-        <StatCard label="Total Lots" value={totalLots} />
         <StatCard
           label="Needs Attention"
           value={attentionCount}
           emphasize={attentionCount > 0}
         />
-        <StatCard
-          label="Over-booked Items"
-          value={overBooked}
-          emphasize={overBooked > 0}
-        />
       </div>
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Lot Status</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-3">
-              {Object.entries(lotsByStatus).map(([status, count]) => (
-                <span
-                  key={status}
-                  className="flex items-center gap-2 text-sm text-muted-foreground"
-                >
-                  <LotStatusBadge status={status} />
-                  <span className="tabular-nums font-medium text-foreground">
-                    {count}
-                  </span>
-                </span>
-              ))}
-              {totalLots === 0 && (
-                <p className="text-sm text-muted-foreground">No lots yet</p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        <EditableContacts clientId={id} contacts={contacts ?? []} />
-      </div>
+      <EditableContacts clientId={id} contacts={contacts ?? []} />
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-4">
@@ -266,12 +244,18 @@ async function ClientDetail({ params }: DetailPageProps) {
                   lid_color: string;
                 } | null;
                 const skuOrders = ordersBySku[sku.id] ?? [];
+                const rowHref = formula
+                  ? `/dashboard/formulas/${sku.formula_id}`
+                  : `/dashboard/formulas/new?clientId=${id}&skuId=${sku.id}`;
                 return (
                   <li
                     key={sku.id}
                     className="flex flex-col gap-1 border-b pb-3 last:border-0 last:pb-0"
                   >
-                    <div className="flex flex-wrap items-center gap-2">
+                    <Link
+                      href={rowHref}
+                      className="-mx-2 flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40"
+                    >
                       <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
                         {sku.code}
                       </span>
@@ -290,38 +274,29 @@ async function ClientDetail({ params }: DetailPageProps) {
                       <div className="ml-auto flex items-center gap-3">
                         {formula ? (
                           <>
-                            <Link
-                              href={`/dashboard/formulas/${sku.formula_id}`}
-                              className="text-xs text-muted-foreground hover:underline"
-                            >
+                            <span className="text-xs text-muted-foreground">
                               {formula.formula_number ?? "Formula"} v
                               {formula.version}
                               {formula.status === "authorized" && (
                                 <span className="ml-1 text-green-600">✓</span>
                               )}
-                            </Link>
-                            <Link
-                              href={`/dashboard/formulas/${sku.formula_id}`}
-                              className="text-xs font-medium text-foreground hover:underline"
-                            >
+                            </span>
+                            <span className="text-xs font-medium text-foreground">
                               Edit formula
-                            </Link>
+                            </span>
                           </>
                         ) : (
                           <>
                             <span className="text-xs text-muted-foreground">
                               No formula
                             </span>
-                            <Link
-                              href={`/dashboard/formulas/new?clientId=${id}&skuId=${sku.id}`}
-                              className="text-xs font-medium text-foreground hover:underline"
-                            >
+                            <span className="text-xs font-medium text-foreground">
                               Add formula
-                            </Link>
+                            </span>
                           </>
                         )}
                       </div>
-                    </div>
+                    </Link>
                     {skuOrders.length > 0 && (
                       <ul className="ml-4 flex flex-col gap-0.5">
                         {skuOrders.map((order) => (
@@ -451,154 +426,59 @@ async function ClientDetail({ params }: DetailPageProps) {
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-4">
-            <CardTitle className="text-base">Recent Lots</CardTitle>
-            <ButtonLink href={`/dashboard/lots?clientId=${id}`}>
-              View lots →
-            </ButtonLink>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-muted-foreground">
-                    <th className="pb-2 text-left font-medium">Lot #</th>
-                    <th className="pb-2 text-left font-medium">Item</th>
-                    <th className="pb-2 text-left font-medium">Status</th>
-                    <th className="pb-2 text-right font-medium">Received</th>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <div>
+            <CardTitle className="text-base">Inventory</CardTitle>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {inventoryRows.length} items · {withReservations} reserved
+              {overBooked > 0 && ` · ${overBooked} over-booked`}
+            </p>
+          </div>
+          <ButtonLink href={`/dashboard/inventory/summary?clientId=${id}`}>
+            Full summary →
+          </ButtonLink>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-muted-foreground">
+                  <th className="pb-2 text-left font-medium">Item</th>
+                  <th className="pb-2 text-left font-medium">Type</th>
+                  <th className="pb-2 text-right font-medium">Available</th>
+                </tr>
+              </thead>
+              <tbody>
+                {inventoryRows.map((row) => (
+                  <tr
+                    key={row.item_id}
+                    className="border-b last:border-0 hover:bg-muted/30"
+                  >
+                    <td className="py-2 pr-4 font-medium">{row.item_name}</td>
+                    <td className="py-2 pr-4">
+                      <ItemTypeBadge type={row.item_type} />
+                    </td>
+                    <td className="py-2 text-right tabular-nums font-medium">
+                      <AvailableQty row={row} />
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {clientLots.map((lot) => {
-                    const item = lot.items as unknown as {
-                      name: string;
-                      item_type: string;
-                    } | null;
-                    return (
-                      <tr
-                        key={lot.id}
-                        className="border-b last:border-0 hover:bg-muted/30"
-                      >
-                        <td className="py-2 pr-4 font-mono text-xs whitespace-nowrap">
-                          <Link
-                            href={`/dashboard/lots/${lot.id}`}
-                            className="hover:underline"
-                          >
-                            {lot.lot_number}
-                          </Link>
-                        </td>
-                        <td className="py-2 pr-4">
-                          {item?.name ?? (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="py-2 pr-4">
-                          <LotStatusBadge status={lot.status} />
-                        </td>
-                        <td className="py-2 text-right text-muted-foreground">
-                          {lot.received_at
-                            ? new Date(lot.received_at).toLocaleDateString()
-                            : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {clientLots.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={4}
-                        className="py-8 text-center text-sm text-muted-foreground"
-                      >
-                        No lots
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            {totalLots > RECENT_LOTS_LIMIT && (
-              <p className="mt-3 text-xs text-muted-foreground">
-                Showing {RECENT_LOTS_LIMIT} of {totalLots} lots.{" "}
-                <Link
-                  href={`/dashboard/lots?clientId=${id}`}
-                  className="hover:underline"
-                >
-                  See all
-                </Link>
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-4">
-            <div>
-              <CardTitle className="text-base">Inventory</CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {inventoryRows.length} items · {withReservations} reserved
-                {overBooked > 0 && ` · ${overBooked} over-booked`}
-              </p>
-            </div>
-            <ButtonLink href={`/dashboard/inventory/summary?clientId=${id}`}>
-              Full summary →
-            </ButtonLink>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-muted-foreground">
-                    <th className="pb-2 text-left font-medium">Item</th>
-                    <th className="pb-2 text-left font-medium">Type</th>
-                    <th className="pb-2 text-right font-medium">Available</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {inventoryPreview.map((row) => (
-                    <tr
-                      key={row.item_id}
-                      className="border-b last:border-0 hover:bg-muted/30"
+                ))}
+                {inventoryRows.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={3}
+                      className="py-8 text-center text-sm text-muted-foreground"
                     >
-                      <td className="py-2 pr-4 font-medium">{row.item_name}</td>
-                      <td className="py-2 pr-4">
-                        <ItemTypeBadge type={row.item_type} />
-                      </td>
-                      <td className="py-2 text-right tabular-nums font-medium">
-                        <AvailableQty row={row} />
-                      </td>
-                    </tr>
-                  ))}
-                  {inventoryRows.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={3}
-                        className="py-8 text-center text-sm text-muted-foreground"
-                      >
-                        No inventory on hand
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            {inventoryRows.length > INVENTORY_PREVIEW_LIMIT && (
-              <p className="mt-3 text-xs text-muted-foreground">
-                Showing {INVENTORY_PREVIEW_LIMIT} of {inventoryRows.length}{" "}
-                items
-                {overBooked > 0 ? " (over-booked first)" : ""}.{" "}
-                <Link
-                  href={`/dashboard/inventory/summary?clientId=${id}`}
-                  className="hover:underline"
-                >
-                  See all
-                </Link>
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+                      No inventory on hand
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -679,8 +559,8 @@ function ClientDetailFallback() {
   return (
     <div className="flex flex-col gap-6">
       <div className="h-8 w-56 animate-pulse rounded bg-muted" />
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-5">
-        {Array.from({ length: 5 }).map((_, i) => (
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, i) => (
           <Card key={i}>
             <CardHeader className="pb-2">
               <div className="h-4 w-20 animate-pulse rounded bg-muted" />
@@ -691,19 +571,15 @@ function ClientDetailFallback() {
           </Card>
         ))}
       </div>
-      <div className="grid gap-6 md:grid-cols-2">
-        {[0, 1].map((i) => (
-          <Card key={i}>
-            <CardHeader>
-              <div className="h-5 w-32 animate-pulse rounded bg-muted" />
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <div className="h-4 w-full animate-pulse rounded bg-muted" />
-              <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      <Card>
+        <CardHeader>
+          <div className="h-5 w-32 animate-pulse rounded bg-muted" />
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="h-4 w-full animate-pulse rounded bg-muted" />
+          <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -727,26 +603,6 @@ function OrderStatusBadge({ status }: { status: string }) {
     <Badge className={`text-[10px] px-1.5 py-0 ${map[status] ?? ""}`}>
       {labels[status] ?? status}
     </Badge>
-  );
-}
-
-function LotStatusBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    released: "bg-green-100 text-green-800 border-green-200",
-    quarantine: "bg-yellow-100 text-yellow-800 border-yellow-200",
-    on_hold: "bg-red-100 text-red-800 border-red-200",
-    consumed: "bg-gray-100 text-gray-600 border-gray-200",
-    destroyed: "bg-gray-100 text-gray-600 border-gray-200",
-  };
-  const labels: Record<string, string> = {
-    released: "Released",
-    quarantine: "Quarantine",
-    on_hold: "On Hold",
-    consumed: "Consumed",
-    destroyed: "Destroyed",
-  };
-  return (
-    <Badge className={map[status] ?? ""}>{labels[status] ?? status}</Badge>
   );
 }
 

@@ -2,7 +2,6 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import { LogoutButton } from "@/components/logout-button";
-import { Suspense } from "react";
 
 const navLinks = [
   { href: "/dashboard", label: "Overview" },
@@ -12,6 +11,7 @@ const navLinks = [
   { href: "/dashboard/lots", label: "Lots" },
   { href: "/dashboard/inventory/summary", label: "Inventory" },
   { href: "/dashboard/inventory", label: "Lot Detail" },
+  { href: "/dashboard/inventory/counts", label: "Counts" },
   { href: "/dashboard/receiving", label: "Receiving" },
   { href: "/dashboard/clients", label: "Clients" },
   { href: "/dashboard/formulas/new", label: "New Formula" },
@@ -20,19 +20,11 @@ const navLinks = [
   { href: "/dashboard/settings", label: "Settings" },
 ];
 
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return (
-    <Suspense fallback={<DashboardLayoutFallback />}>
-      <DashboardShell>{children}</DashboardShell>
-    </Suspense>
-  );
-}
-
-async function DashboardShell({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
   const { data } = await supabase.auth.getClaims();
   if (!data?.claims) {
@@ -60,27 +52,6 @@ async function DashboardShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       <main className="flex-1 p-6 max-w-7xl w-full mx-auto">{children}</main>
-    </div>
-  );
-}
-
-function DashboardLayoutFallback() {
-  return (
-    <div className="min-h-screen flex flex-col">
-      <header className="border-b h-14 flex items-center px-6 gap-6 shrink-0">
-        <span className="font-semibold text-sm">QuantumCanning</span>
-        <nav className="flex gap-4 text-sm">
-          {navLinks.map((link) => (
-            <span key={link.href} className="text-muted-foreground">
-              {link.label}
-            </span>
-          ))}
-        </nav>
-        <div className="ml-auto h-4 w-40 animate-pulse rounded bg-muted" />
-      </header>
-      <main className="flex-1 p-6 max-w-7xl w-full mx-auto">
-        <div className="h-6 w-48 animate-pulse rounded bg-muted" />
-      </main>
     </div>
   );
 }

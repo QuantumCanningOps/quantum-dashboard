@@ -1,18 +1,14 @@
 import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { Suspense, type ReactNode } from "react";
-import { ClientsLayoutFallback, ClientsPanels } from "./ClientsMenu";
+import type { ReactNode } from "react";
+import { ClientsPanels } from "./ClientsMenu";
 
-export default function ClientsLayout({ children }: { children: ReactNode }) {
-  return (
-    <Suspense fallback={<ClientsLayoutFallback />}>
-      <ClientsShell>{children}</ClientsShell>
-    </Suspense>
-  );
-}
-
-async function ClientsShell({ children }: { children: ReactNode }) {
+export default async function ClientsLayout({
+  children,
+}: {
+  children: ReactNode;
+}) {
   const supabase = await createClient();
   const { data: clients } = await supabase
     .from("clients")

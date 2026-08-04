@@ -489,15 +489,30 @@ export function LineRow({
       {/* Row 2: quantity + basis */}
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-1.5">
-          <Label className="text-xs">Quantity *</Label>
+          <Label className="text-xs">
+            Quantity *{line.quantityBasis === "percentage" ? " (%)" : ""}
+          </Label>
           <Input
-            type="number"
-            min="0"
-            step="any"
-            placeholder="0"
+            type="text"
+            inputMode="decimal"
+            placeholder={
+              line.quantityBasis === "percentage" ? "e.g. 91.46" : "0"
+            }
             value={line.quantity}
-            onChange={(e) => onUpdate(line.key, { quantity: e.target.value })}
+            onChange={(e) => {
+              const v = e.target.value;
+              // Text input avoids number-spinner / scroll wheel ±1 changes.
+              if (v === "" || /^\d*\.?\d*$/.test(v)) {
+                onUpdate(line.key, { quantity: v });
+              }
+            }}
           />
+          {line.quantityBasis === "percentage" && (
+            <p className="text-[11px] text-muted-foreground">
+              Enter percent as shown on the sheet (91.46), not the fraction
+              (0.9146).
+            </p>
+          )}
         </div>
         <div className="flex flex-col gap-1.5">
           <Label className="text-xs">Basis *</Label>

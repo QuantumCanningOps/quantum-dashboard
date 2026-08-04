@@ -18,6 +18,11 @@ import {
   type FormulaDocument,
 } from "./FormulaDocuments";
 import { ImportWarningBanner } from "./ImportWarningBanner";
+import {
+  ClientFormulasNav,
+  type ClientFormulaNavItem,
+} from "./ClientFormulasNav";
+import { DeleteFormulaButton } from "./DeleteFormulaButton";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import type { CanType, ItemOption, SecondaryPackaging, SkuOption } from "../shared";
@@ -46,7 +51,7 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
   const { data: formula } = await supabase
     .from("formulas")
     .select(
-      "id, client_id, formula_number, name, version, base_quantity, base_unit_of_measure, batching_instructions, status, notes, created_at, clients(name, code)"
+      "id, client_id, formula_number, name, version, base_quantity, base_unit_of_measure, density_lbs_per_gallon, batching_instructions, status, notes, created_at, clients(name, code)"
     )
     .eq("id", id)
     .single();
@@ -63,6 +68,7 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
     { data: clientSkus },
     { data: documents },
     { count: orphanPackagingCount },
+    { data: clientFormulas },
   ] = await Promise.all([
     supabase
       .from("skus")
@@ -92,9 +98,7 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
       .order("code"),
     supabase
       .from("documents")
-      .select(
-        "id, document_type, file_name, storage_path, uploaded_at, artwork_status",
-      )
+      .select("id, document_type, file_name, uploaded_at, artwork_status")
       .eq("formula_id", id)
       .in("document_type", ["pa_letter", "artwork"])
       .order("uploaded_at", { ascending: false }),
@@ -103,6 +107,13 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
       .select("id", { count: "exact", head: true })
       .eq("formula_id", id)
       .eq("line_type", "packaging"),
+    supabase
+      .from("formulas")
+      .select("id, formula_number, name, version, status, skus(code, name)")
+      .eq("client_id", formula.client_id)
+      .order("name")
+      .order("formula_number")
+      .order("version", { ascending: false }),
   ]);
 
   const linkedSkus = (skus ?? []) as SkuRow[];
@@ -141,12 +152,7 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
   const client = formula.clients as unknown as { name: string; code: string } | null;
   const formulaLines = (lines ?? []) as unknown as FormulaLine[];
   const formulaSpecs = (specs ?? []) as FormulaSpec[];
-  const formulaDocuments = await withArtworkPreviewUrls(
-    supabase,
-    (documents ?? []) as Array<
-      FormulaDocument & { storage_path: string }
-    >,
-  );
+  const formulaDocuments = (documents ?? []) as FormulaDocument[];
   const packagingLineViews: PackagingLineView[] = packagingLines.map((line) => ({
     id: line.id,
     item_id: line.item_id,
@@ -161,113 +167,190 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
     packagingLineViews,
   );
 
+  const siblingFormulas: ClientFormulaNavItem[] = (clientFormulas ?? [])
+    .map((row) => {
+      const linked = row.skus as
+        | { code: string; name: string }
+        | { code: string; name: string }[]
+        | null;
+      const sku = Array.isArray(linked) ? linked[0] : linked;
+      return {
+        id: row.id,
+        formula_number: row.formula_number,
+        name: row.name,
+        version: row.version,
+        status: row.status,
+        sku_code: sku?.code ?? null,
+        sku_name: sku?.name ?? null,
+      };
+    })
+    .sort((a, b) => {
+      const labelA =
+        a.name?.trim() ||
+        a.sku_name?.trim() ||
+        a.formula_number?.trim() ||
+        "";
+      const labelB =
+        b.name?.trim() ||
+        b.sku_name?.trim() ||
+        b.formula_number?.trim() ||
+        "";
+      const byLabel = labelA.localeCompare(labelB, undefined, {
+        sensitivity: "base",
+      });
+      if (byLabel !== 0) return byLabel;
+      return b.version - a.version;
+    });
+
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <Link
-          href={`/dashboard/clients/${formula.client_id}`}
-          className="text-sm text-muted-foreground hover:text-foreground hover:underline"
-        >
-          ← {client?.name ?? "Clients"}
-        </Link>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold">
-            {formula.name ?? skus?.[0]?.name ?? "Formula"}
-          </h1>
-          {formula.formula_number && (
-            <Badge className="bg-slate-100 text-slate-600 border-slate-200 font-mono">
-              {formula.formula_number}
-            </Badge>
-          )}
-          <FormulaStatusBadge status={formula.status} />
+    <div className="flex flex-col gap-4 md:flex-row md:gap-6">
+      <ClientFormulasNav
+        clientId={formula.client_id}
+        clientName={client?.name ?? "Client"}
+        formulas={siblingFormulas}
+        currentFormulaId={formula.id}
+      />
+
+      <div className="flex min-w-0 flex-1 flex-col gap-6">
+        <div className="flex flex-col gap-2">
+          <Link
+            href={`/dashboard/clients/${formula.client_id}`}
+            className="text-sm text-muted-foreground hover:text-foreground hover:underline"
+          >
+            ← {client?.name ?? "Clients"}
+          </Link>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-2xl font-bold">
+                  {formula.name ?? skus?.[0]?.name ?? "Formula"}
+                </h1>
+                {formula.formula_number && (
+                  <Badge className="bg-slate-100 text-slate-600 border-slate-200 font-mono">
+                    {formula.formula_number}
+                  </Badge>
+                )}
+                <FormulaStatusBadge status={formula.status} />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {client?.name} · Formula v{formula.version} ·{" "}
+                {Number(formula.base_quantity).toLocaleString()}{" "}
+                {formula.base_unit_of_measure}
+              </p>
+            </div>
+            <DeleteFormulaButton
+              formulaId={formula.id}
+              formulaLabel={
+                formula.name ??
+                formula.formula_number ??
+                skus?.[0]?.name ??
+                "this formula"
+              }
+            />
+          </div>
         </div>
-        <p className="text-sm text-muted-foreground">
-          {client?.name} · Formula v{formula.version} ·{" "}
-          {Number(formula.base_quantity).toLocaleString()}{" "}
-          {formula.base_unit_of_measure}
-        </p>
-      </div>
 
-      {importWarn && <ImportWarningBanner message={importWarn} />}
+        {importWarn && <ImportWarningBanner message={importWarn} />}
 
-      {(orphanPackagingCount ?? 0) > 0 && !linkedSkuId && (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          This formula still has packaging lines but no linked SKU. Link a SKU
-          and move packaging into SKU Packaging specs.
+        {(orphanPackagingCount ?? 0) > 0 && !linkedSkuId && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            This formula still has packaging lines but no linked SKU. Link a SKU
+            and move packaging into SKU Packaging specs.
+          </div>
+        )}
+
+        <div className="grid md:grid-cols-[1fr_2fr] gap-6">
+          <EditableSku
+            formulaId={formula.id}
+            clientId={formula.client_id}
+            linkedSkus={linkedSkus}
+            clientSkus={(clientSkus ?? []) as SkuOption[]}
+          />
+
+          <EditableBatchingInstructions
+            formulaId={formula.id}
+            batchingInstructions={formula.batching_instructions}
+          />
         </div>
-      )}
 
-      <div className="grid md:grid-cols-[1fr_2fr] gap-6">
-        <EditableSku
+        <EditableSkuPackaging
           formulaId={formula.id}
           clientId={formula.client_id}
-          linkedSkus={linkedSkus}
-          clientSkus={(clientSkus ?? []) as SkuOption[]}
+          skuId={linkedSkuId}
+          packaging={packagingHeader}
+          lines={packagingLines}
+          items={(items ?? []) as ItemOption[]}
         />
 
-        <EditableBatchingInstructions
+        <FormulaBatchScaler
+          baseQuantity={Number(formula.base_quantity)}
+          baseUnitOfMeasure={formula.base_unit_of_measure}
+          clientId={formula.client_id}
           formulaId={formula.id}
-          batchingInstructions={formula.batching_instructions}
+          lines={formulaLines}
+          packagingLines={packagingLineViews}
+          items={(items ?? []) as ItemOption[]}
+          inventoryAvailability={inventoryAvailability}
+          cansPerTray={packagingHeader?.cans_per_tray}
+          canSizeOz={
+            packagingHeader?.can_size_oz != null
+              ? Number(packagingHeader.can_size_oz)
+              : undefined
+          }
+          densityLbsPerGallon={
+            formula.density_lbs_per_gallon != null
+              ? Number(formula.density_lbs_per_gallon)
+              : undefined
+          }
+        />
+
+        <EditableSpecs formulaId={formula.id} specs={formulaSpecs} />
+
+        <FormulaDocuments
+          formulaId={formula.id}
+          clientId={formula.client_id}
+          documents={formulaDocuments}
         />
       </div>
-
-      <EditableSkuPackaging
-        formulaId={formula.id}
-        clientId={formula.client_id}
-        skuId={linkedSkuId}
-        packaging={packagingHeader}
-        lines={packagingLines}
-        items={(items ?? []) as ItemOption[]}
-      />
-
-      <FormulaBatchScaler
-        baseQuantity={Number(formula.base_quantity)}
-        baseUnitOfMeasure={formula.base_unit_of_measure}
-        clientId={formula.client_id}
-        formulaId={formula.id}
-        lines={formulaLines}
-        packagingLines={packagingLineViews}
-        items={(items ?? []) as ItemOption[]}
-        inventoryAvailability={inventoryAvailability}
-        cansPerTray={packagingHeader?.cans_per_tray}
-        canSizeOz={
-          packagingHeader?.can_size_oz != null
-            ? Number(packagingHeader.can_size_oz)
-            : undefined
-        }
-      />
-
-      <EditableSpecs formulaId={formula.id} specs={formulaSpecs} />
-
-      <FormulaDocuments
-        formulaId={formula.id}
-        clientId={formula.client_id}
-        documents={formulaDocuments}
-      />
     </div>
   );
 }
 
 function FormulaFallback() {
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3">
-        <div className="h-4 w-24 animate-pulse rounded bg-muted" />
-        <div className="h-8 w-64 animate-pulse rounded bg-muted" />
-        <div className="h-4 w-80 animate-pulse rounded bg-muted" />
-      </div>
-      <div className="grid md:grid-cols-[1fr_2fr] gap-6">
-        {[0, 1].map((item) => (
-          <Card key={item}>
-            <CardHeader>
-              <div className="h-5 w-32 animate-pulse rounded bg-muted" />
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <div className="h-4 w-full animate-pulse rounded bg-muted" />
-              <div className="h-4 w-3/4 animate-pulse rounded bg-muted" />
-            </CardContent>
-          </Card>
-        ))}
+    <div className="flex flex-col gap-4 md:flex-row md:gap-6">
+      <aside className="w-full shrink-0 md:w-56 lg:w-64">
+        <div className="rounded-lg border bg-card">
+          <div className="border-b px-3 py-2.5">
+            <div className="h-3 w-16 animate-pulse rounded bg-muted" />
+            <div className="mt-2 h-4 w-28 animate-pulse rounded bg-muted" />
+          </div>
+          <div className="flex flex-col gap-2 p-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="h-12 animate-pulse rounded bg-muted" />
+            ))}
+          </div>
+        </div>
+      </aside>
+      <div className="flex min-w-0 flex-1 flex-col gap-6">
+        <div className="flex flex-col gap-3">
+          <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+          <div className="h-8 w-64 animate-pulse rounded bg-muted" />
+          <div className="h-4 w-80 animate-pulse rounded bg-muted" />
+        </div>
+        <div className="grid md:grid-cols-[1fr_2fr] gap-6">
+          {[0, 1].map((item) => (
+            <Card key={item}>
+              <CardHeader>
+                <div className="h-5 w-32 animate-pulse rounded bg-muted" />
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <div className="h-4 w-full animate-pulse rounded bg-muted" />
+                <div className="h-4 w-3/4 animate-pulse rounded bg-muted" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -289,29 +372,6 @@ function FormulaStatusBadge({ status }: { status: string }) {
   return <Badge className={map[status] ?? ""}>{labels[status] ?? status}</Badge>;
 }
 
-async function withArtworkPreviewUrls(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  documents: Array<FormulaDocument & { storage_path: string }>,
-): Promise<FormulaDocument[]> {
-  return Promise.all(
-    documents.map(async (doc) => {
-      const { storage_path: _storagePath, ...rest } = doc;
-      if (doc.document_type !== "artwork") {
-        return rest;
-      }
-
-      const { data: signed } = await supabase.storage
-        .from("documents")
-        .createSignedUrl(doc.storage_path, 60 * 60);
-
-      return {
-        ...rest,
-        previewUrl: signed?.signedUrl ?? null,
-      };
-    }),
-  );
-}
-
 async function getInventoryAvailability(
   supabase: Awaited<ReturnType<typeof createClient>>,
   formulaLines: FormulaLine[],
@@ -330,14 +390,16 @@ async function getInventoryAvailability(
 
   const { data: inventory } = await supabase
     .from("inventory_on_hand")
-    .select("item_id, unit_of_measure, quantity_on_hand")
+    .select("item_id, unit_of_measure, quantity_on_hand, is_offsite")
     .in("item_id", itemIds);
 
   const availability = (inventory ?? []).reduce((acc, row) => {
-    acc[row.item_id] ??= {};
-    acc[row.item_id][row.unit_of_measure] =
-      (acc[row.item_id][row.unit_of_measure] ?? 0) +
-      Number(row.quantity_on_hand);
+    const qty = Number(row.quantity_on_hand);
+    const item = (acc[row.item_id] ??= { total: {}, onsite: {}, offsite: {} });
+    const bucket = row.is_offsite ? item.offsite : item.onsite;
+    item.total[row.unit_of_measure] =
+      (item.total[row.unit_of_measure] ?? 0) + qty;
+    bucket[row.unit_of_measure] = (bucket[row.unit_of_measure] ?? 0) + qty;
     return acc;
   }, {} as InventoryAvailability);
 
@@ -346,8 +408,12 @@ async function getInventoryAvailability(
       continue;
     }
 
-    availability[line.item_id] ??= {};
-    availability[line.item_id][line.unit_of_measure] = Number.MAX_SAFE_INTEGER;
+    // Plant water — treat as unlimited on-site.
+    availability[line.item_id] = {
+      total: { [line.unit_of_measure]: Number.MAX_SAFE_INTEGER },
+      onsite: { [line.unit_of_measure]: Number.MAX_SAFE_INTEGER },
+      offsite: {},
+    };
   }
 
   return availability;

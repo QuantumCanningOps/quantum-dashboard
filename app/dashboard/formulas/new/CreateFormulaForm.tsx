@@ -8,6 +8,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { GoogleDrivePickerButton } from "@/components/GoogleDrivePickerButton";
+import {
+  DEFAULT_DENSITY_LBS_PER_GALLON,
+  normalizeSheetUnit,
+} from "@/lib/formula-batching";
 import { matchItemByDescription } from "@/lib/match-item";
 import { randomId } from "@/lib/utils";
 import { type NewItemResult } from "../../receiving/actions";
@@ -177,6 +181,9 @@ export function CreateFormulaForm({
   const [name, setName] = useState(defaultName);
   const [baseQuantity, setBaseQuantity] = useState("");
   const [baseUnitOfMeasure, setBaseUnitOfMeasure] = useState("");
+  const [densityLbsPerGallon, setDensityLbsPerGallon] = useState(
+    String(DEFAULT_DENSITY_LBS_PER_GALLON),
+  );
   const [batchingInstructions, setBatchingInstructions] = useState("");
   const [status, setStatus] = useState<"draft" | "pending_authorization">("draft");
 
@@ -232,16 +239,44 @@ export function CreateFormulaForm({
     const lineType: LineType =
       raw.lineType === "packaging" ? "packaging" : "ingredient";
 
-    // Prefer sheet Target Weight/Volume (authoritative) over printed %.
-    const targetLbs =
-      raw.targetWeightLbs != null && Number.isFinite(Number(raw.targetWeightLbs))
-        ? Number(raw.targetWeightLbs)
-        : null;
-    if (targetLbs != null && targetLbs > 0) {
+    // Server refine already converts Target Weight → per_batch with the sheet
+    // Units column (lbs or g). Prefer that; fall back to targetWeight(+Unit).
+    const refinedPerBatch =
+      raw.quantityBasis === "per_batch" &&
+      raw.quantity != null &&
+      Number.isFinite(Number(raw.quantity)) &&
+      Number(raw.quantity) > 0;
+
+    if (refinedPerBatch) {
+      const unit =
+        normalizeSheetUnit(raw.unitOfMeasure) ??
+        normalizeSheetUnit(raw.targetUnit) ??
+        ((raw.unitOfMeasure ?? "").trim() || "lbs");
       return {
         lineType,
-        quantity: String(targetLbs),
-        unitOfMeasure: "lbs",
+        quantity: String(raw.quantity),
+        unitOfMeasure: unit === "%" ? "lbs" : unit,
+        quantityBasis: "per_batch",
+        itemDescription: (raw.itemDescription ?? "").trim(),
+      };
+    }
+
+    const targetWeight =
+      raw.targetWeight != null && Number.isFinite(Number(raw.targetWeight))
+        ? Number(raw.targetWeight)
+        : raw.targetWeightLbs != null &&
+            Number.isFinite(Number(raw.targetWeightLbs))
+          ? Number(raw.targetWeightLbs)
+          : null;
+    if (targetWeight != null && targetWeight > 0) {
+      const unit =
+        normalizeSheetUnit(raw.targetUnit) ??
+        normalizeSheetUnit(raw.unitOfMeasure) ??
+        "lbs";
+      return {
+        lineType,
+        quantity: String(targetWeight),
+        unitOfMeasure: unit === "%" ? "lbs" : unit,
         quantityBasis: "per_batch",
         itemDescription: (raw.itemDescription ?? "").trim(),
       };
@@ -262,7 +297,8 @@ export function CreateFormulaForm({
     const unitOfMeasure =
       quantityBasis === "percentage"
         ? "%"
-        : (raw.unitOfMeasure ?? "").trim() || "";
+        : (normalizeSheetUnit(raw.unitOfMeasure) ??
+          (raw.unitOfMeasure ?? "").trim());
 
     return {
       lineType,
@@ -310,6 +346,13 @@ export function CreateFormulaForm({
       }
       if (data.baseUnitOfMeasure) {
         setBaseUnitOfMeasure(data.baseUnitOfMeasure);
+      }
+      if (
+        data.densityLbsPerGallon != null &&
+        Number(data.densityLbsPerGallon) > 0
+      ) {
+        setDensityLbsPerGallon(String(data.densityLbsPerGallon));
+        notes.push(`density ${data.densityLbsPerGallon}`);
       }
       if (data.batchingInstructions) {
         setBatchingInstructions(data.batchingInstructions);
@@ -577,6 +620,7 @@ export function CreateFormulaForm({
         artwork = { fileName: artworkFile.name, storagePath: path };
       }
 
+      const density = Number(densityLbsPerGallon);
       const result = await createFormula({
         clientId,
         skuId: skuId || null,
@@ -586,6 +630,8 @@ export function CreateFormulaForm({
         baseUnitOfMeasure: baseUnitOfMeasure.trim(),
         batchingInstructions: batchingInstructions.trim() || null,
         status,
+        densityLbsPerGallon:
+          density > 0 ? density : DEFAULT_DENSITY_LBS_PER_GALLON,
         lines: lines
           .filter((l) => l.lineType === "ingredient")
           .map((l) => ({
@@ -870,6 +916,30 @@ export function CreateFormulaForm({
                 value={baseUnitOfMeasure}
                 onChange={(e) => setBaseUnitOfMeasure(e.target.value)}
               />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="density-lbs-per-gal">Density (lbs/gal)</Label>
+              <Input
+                id="density-lbs-per-gal"
+                type="text"
+                inputMode="decimal"
+                placeholder="8.4"
+                value={densityLbsPerGallon}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "" || /^\d*\.?\d*$/.test(v)) {
+                    setDensityLbsPerGallon(v);
+                  }
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                From the sheet&apos;s density (lbs/gal). Often 8.4; Dappled-style
+                sheets use 8.345. This must match the sheet or % and Target
+                Weight will disagree.
+              </p>
             </div>
           </div>
 

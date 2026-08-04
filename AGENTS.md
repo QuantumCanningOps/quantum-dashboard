@@ -1,0 +1,19 @@
+## Learned User Preferences
+
+- Prefer commit-and-push as work progresses; when a task is complete, open a PR with a solid description, then review that PR as a fresh first-pass reviewer.
+- When asked to address review findings, apply all of them and commit/push the fixes rather than leaving optional follow-ups.
+
+## Learned Workspace Facts
+
+- The Clients page is a master-detail layout: a left menu of client names and a right detail panel, using `/dashboard/clients` with nested `/dashboard/clients/[id]` via a shared layout.
+- Client detail dashboards cover stats, contacts, SKUs/formulas, production orders, lots, and inventory; the lots list supports filtering via `?clientId=`.
+- Contacts link to clients polymorphically with `party_type = 'client'` and `party_id = clients.id`, not a direct `client_id` foreign key.
+- Supabase tables and RPCs need GRANTs for the `authenticated` role in addition to RLS; missing table grants cause PostgREST 403s that look like empty data, and missing RPCs or EXECUTE grants surface as schema-cache function-not-found errors.
+- Prefer a shared `randomId()` (or equivalent fallback using `crypto.getRandomValues`) over bare `crypto.randomUUID()`, which fails in non-secure contexts such as `http://` LAN IPs.
+- Database schema/migrations for this app live in the sibling `quantum-ops` repo (`supabase/migrations`); the remote DB can lag those migrations (e.g. formula RPCs, `google_connections`).
+- Formula create/edit uses RPCs `create_formula_with_details`, `replace_formula_lines`, and `replace_formula_specs`.
+- New Formula supports PDF/image sheet import via Anthropic (`extractFromFormulaPdf`), mirroring receiving BOL extraction; imported sheets are stored as `spec_sheet` documents. Extraction must keep the sheet Units column (lbs vs g) on Target Weight lines — never force every line to lbs.
+- On Quantum batching sheets, printed ingredient % values are often rounded; Target Weight is the source of truth and may be lbs or g per line. Excel Target Weight uses `(pct × batch_gal × 3785.41 / 453.59237) × (density / water)` with water fixed at 8.345 lbs/gal and product density from the sheet (default 8.4; Dappled sheets use 8.345). Density is stored on `formulas.density_lbs_per_gallon` and must match the sheet or %↔weight disagree. Required Qty defaults to each line’s entered unit (mixed lbs/g). Formula quantity inputs are text/decimal (not number spinners) to avoid accidental ±1. Standard batch presets are 750/1000/1500/2000/3000 gallons. Basis shows `% · weight`.
+- Document uploads use storage paths `{clientId}/{documentType}/{uuid}/{fileName}` in the `documents` bucket; each formula has one PA letter and one can artwork (replaceable; artwork shown on the formula detail page) plus formula sheets, all linked via `formula_id`.
+- Formula document uploads can use Google Drive Picker when the user has Connect Google in Settings; downloading existing/shared files needs `drive.readonly` (not only `drive.file`) and `GOOGLE_API_KEY` for Picker. Admin paths that read `google_connections` require `SUPABASE_SERVICE_ROLE_KEY` for the same remote project as `NEXT_PUBLIC_SUPABASE_URL` (not the local supabase-demo key). Reconnecting Google must reclaim the existing row on unique `google_sub` rather than inserting a duplicate.
+- Packaging is SKU-scoped via `sku_packaging` (header: `cans_per_tray`, `can_type` sleek/slim/standard default sleek, `lid_color` default silver, etc.) and `sku_packaging_lines` (BOM components), not a hard-coded 24-cans-per-tray formula assumption; packaging materials are inventory-checked like ingredients, and packaging lines move off formulas onto SKUs.

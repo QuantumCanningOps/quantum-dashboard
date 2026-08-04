@@ -7,7 +7,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Check, Pencil, X } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   DEFAULT_CAN_SIZE_OZ,
@@ -19,20 +18,23 @@ import {
   type LineType,
   type PackagingQuantityBasis,
 } from "../shared";
-import { updateFormulaLines } from "./actions";
+import {
+  DEFAULT_DENSITY_LBS_PER_GALLON,
+  GRAMS_PER_LB,
+  WATER_LBS_PER_GALLON,
+  percentFromTargetWeightLbs,
+  targetWeightLbsFromPercent,
+} from "@/lib/formula-batching";
+import { updateFormulaDensity, updateFormulaLines } from "./actions";
 import type { NewItemResult } from "../../receiving/actions";
 
 const FLUID_OUNCES_PER_GALLON = 128;
 const GRAMS_PER_KG = 1000;
-const GRAMS_PER_LB = 453.59237;
-/** Default product density used on Quantum batching sheets (Target Weight/Volume). */
-const DEFAULT_DENSITY_LBS_PER_GALLON = 8.4;
-/** Fixed water density — used for water volume conversion only, not Target Weight. */
-const WATER_LBS_PER_GALLON = 8.345;
 /** Standard production batch sizes (gallons). */
 const STANDARD_BATCH_GALLONS = [750, 1000, 1500, 2000, 3000] as const;
 const batchUnits = ["gallons", "cases", "cans"] as const;
-const requiredQtyUnits = ["g", "kg", "lbs"] as const;
+/** "native" keeps each line in its stored unit (matches batch sheets with mixed lbs/g). */
+const requiredQtyUnits = ["native", "g", "kg", "lbs"] as const;
 
 type BatchUnit = (typeof batchUnits)[number];
 type RequiredQtyUnit = (typeof requiredQtyUnits)[number];
@@ -51,10 +53,15 @@ export type FormulaLine = {
   } | null;
 };
 
-export type InventoryAvailability = Record<
-  string,
-  Record<string, number>
->;
+export type InventoryByUnit = Record<string, number>;
+
+export type ItemInventoryAvailability = {
+  total: InventoryByUnit;
+  onsite: InventoryByUnit;
+  offsite: InventoryByUnit;
+};
+
+export type InventoryAvailability = Record<string, ItemInventoryAvailability>;
 
 export type PackagingLineView = {
   id: string;
@@ -81,6 +88,8 @@ type FormulaBatchScalerProps = {
   /** Pack-out size from sku_packaging; defaults to 24. */
   cansPerTray?: number;
   canSizeOz?: number;
+  /** Product density (lbs/gal) from the batching sheet. */
+  densityLbsPerGallon?: number;
 };
 
 function lineToDraft(line: FormulaLine): LineDraft {
@@ -105,8 +114,8 @@ export function FormulaBatchScaler({
   inventoryAvailability,
   cansPerTray: cansPerTrayProp,
   canSizeOz: canSizeOzProp,
+  densityLbsPerGallon: densityProp,
 }: FormulaBatchScalerProps) {
-  const router = useRouter();
   const cansPerTray =
     cansPerTrayProp != null && cansPerTrayProp > 0
       ? Math.floor(cansPerTrayProp)
@@ -115,20 +124,44 @@ export function FormulaBatchScaler({
     canSizeOzProp != null && canSizeOzProp > 0
       ? canSizeOzProp
       : DEFAULT_CAN_SIZE_OZ;
+  const initialDensity =
+    densityProp != null && densityProp > 0
+      ? densityProp
+      : DEFAULT_DENSITY_LBS_PER_GALLON;
   const [batchAmount, setBatchAmount] = useState(baseQuantity);
   const [batchUnit, setBatchUnit] = useState<BatchUnit>("gallons");
   const [bufferPercent, setBufferPercent] = useState(0);
   const [requiredQtyUnit, setRequiredQtyUnit] =
-    useState<RequiredQtyUnit>("lbs");
-  const [densityLbsPerGallon, setDensityLbsPerGallon] = useState(
-    DEFAULT_DENSITY_LBS_PER_GALLON,
-  );
+    useState<RequiredQtyUnit>("native");
+  const [densityLbsPerGallon, setDensityLbsPerGallon] = useState(initialDensity);
+  const [savedDensity, setSavedDensity] = useState(initialDensity);
+  const [densitySaveError, setDensitySaveError] = useState<string | null>(null);
 
   const [isEditing, setIsEditing] = useState(false);
   const [currentLines, setCurrentLines] = useState(lines);
   const hasPercentageLines = currentLines.some(
     (line) => line.quantity_basis === "percentage",
   );
+  const showsDensityControl =
+    hasPercentageLines || isGallonUnit(baseUnitOfMeasure);
+
+  useEffect(() => {
+    if (densityProp != null && densityProp > 0) {
+      setDensityLbsPerGallon(densityProp);
+      setSavedDensity(densityProp);
+    }
+  }, [densityProp]);
+
+  async function persistDensity(next: number) {
+    if (!(next > 0) || next === savedDensity) return;
+    setDensitySaveError(null);
+    const result = await updateFormulaDensity(formulaId, next);
+    if (!result.success) {
+      setDensitySaveError(result.error);
+      return;
+    }
+    setSavedDensity(next);
+  }
   const [lineDrafts, setLineDrafts] = useState<LineDraft[]>([]);
   const [extraItems, setExtraItems] = useState<ItemOption[]>([]);
   const allItems = [
@@ -214,7 +247,6 @@ export function FormulaBatchScaler({
     }));
     setSaving(false);
     setIsEditing(false);
-    router.refresh();
   }
 
   const presetBatchSizes = useMemo(() => {
@@ -301,12 +333,12 @@ export function FormulaBatchScaler({
               {batchUnit}
             </p>
           )}
-          {hasPercentageLines && (
+          {showsDensityControl && (
             <p className="mt-1 text-sm text-muted-foreground">
-              % → Target Weight = pct × batch gal × product density{" "}
-              {formatQuantity(densityLbsPerGallon)} lbs/gal. Water{" "}
-              {formatQuantity(WATER_LBS_PER_GALLON)} lbs/gal converts water
-              weight to gallons only.
+              % ↔ Target Weight matches Quantum sheets using density{" "}
+              {formatQuantity(densityLbsPerGallon)} lbs/gal (water{" "}
+              {formatQuantity(WATER_LBS_PER_GALLON)}). Set density from the
+              sheet — often 8.4, sometimes 8.345.
             </p>
           )}
         </div>
@@ -379,22 +411,6 @@ export function FormulaBatchScaler({
               </div>
             </div>
           </div>
-          {hasPercentageLines && (
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="density-lbs-per-gal">Density (lbs/gal)</Label>
-              <Input
-                id="density-lbs-per-gal"
-                type="number"
-                min="0"
-                step="0.001"
-                value={densityLbsPerGallon}
-                onChange={(event) =>
-                  setDensityLbsPerGallon(Math.max(0, Number(event.target.value)))
-                }
-                className="w-32"
-              />
-            </div>
-          )}
           <div className="flex flex-wrap gap-2">
             {presetBatchSizes.map((preset) => (
               <Button
@@ -409,6 +425,35 @@ export function FormulaBatchScaler({
             ))}
           </div>
         </div>
+        )}
+        {showsDensityControl && (
+          <div className="flex w-full flex-col gap-2 md:w-auto">
+            <Label htmlFor="density-lbs-per-gal">Density (lbs/gal)</Label>
+            <Input
+              id="density-lbs-per-gal"
+              type="text"
+              inputMode="decimal"
+              value={String(densityLbsPerGallon)}
+              onChange={(event) => {
+                const v = event.target.value;
+                if (v === "" || /^\d*\.?\d*$/.test(v)) {
+                  const n = Number(v);
+                  if (v !== "" && Number.isFinite(n)) {
+                    setDensityLbsPerGallon(n);
+                  } else if (v === "") {
+                    setDensityLbsPerGallon(0);
+                  }
+                }
+              }}
+              onBlur={() => {
+                void persistDensity(densityLbsPerGallon);
+              }}
+              className="w-32"
+            />
+            {densitySaveError && (
+              <p className="text-xs text-destructive">{densitySaveError}</p>
+            )}
+          </div>
         )}
       </CardHeader>
       <CardContent>
@@ -472,13 +517,14 @@ export function FormulaBatchScaler({
                           className="h-6 px-2 text-xs"
                           onClick={() => setRequiredQtyUnit(unit)}
                         >
-                          {unit}
+                          {unit === "native" ? "as entered" : unit}
                         </Button>
                       ))}
                     </div>
                   </div>
                 </th>
                 <th className="pb-2 text-center font-medium">On Hand</th>
+                <th className="pb-2 text-center font-medium">Location</th>
               </tr>
             </thead>
             <tbody>
@@ -492,11 +538,17 @@ export function FormulaBatchScaler({
                   quantity,
                   requiredQtyUnit,
                 );
+                const itemAvailability = inventoryAvailability[line.item_id];
                 const availableQuantity = getAvailableQuantity(
-                  inventoryAvailability[line.item_id],
+                  itemAvailability?.total,
                   display.unit,
                 );
                 const hasEnough = availableQuantity >= display.quantity;
+                const location = getInventoryLocationStatus(
+                  itemAvailability,
+                  display.unit,
+                  display.quantity,
+                );
                 const itemName = line.items?.name ?? "Unnamed item";
                 const quantityLbs =
                   line.quantity_basis === "percentage"
@@ -524,7 +576,12 @@ export function FormulaBatchScaler({
                       <LineTypeBadge type="ingredient" />
                     </td>
                     <td className="py-2 text-right tabular-nums">
-                      {formatBasis(line, baseQuantity, baseUnitOfMeasure)}
+                      {formatBasis(
+                        line,
+                        baseQuantity,
+                        baseUnitOfMeasure,
+                        densityLbsPerGallon,
+                      )}
                     </td>
                     <td className="py-2 text-right tabular-nums font-medium">
                       <div>
@@ -542,7 +599,7 @@ export function FormulaBatchScaler({
                     </td>
                     <td className="py-2 text-center">
                       <span
-                        title={`${formatInventoryAvailability(inventoryAvailability[line.item_id])} on hand`}
+                        title={`${formatInventoryAvailability(itemAvailability?.total)} on hand`}
                         aria-label={
                           hasEnough
                             ? "Inventory is sufficient"
@@ -561,6 +618,9 @@ export function FormulaBatchScaler({
                         )}
                       </span>
                     </td>
+                    <td className="py-2 text-center">
+                      <InventoryLocationBadge status={location} />
+                    </td>
                   </tr>
                 );
               })}
@@ -570,11 +630,17 @@ export function FormulaBatchScaler({
                   filledCanCount,
                   cansPerTray,
                 );
+                const itemAvailability = inventoryAvailability[line.item_id];
                 const availableQuantity = getAvailableQuantity(
-                  inventoryAvailability[line.item_id],
+                  itemAvailability?.total,
                   line.unit_of_measure,
                 );
                 const hasEnough = availableQuantity >= quantity;
+                const location = getInventoryLocationStatus(
+                  itemAvailability,
+                  line.unit_of_measure,
+                  quantity,
+                );
                 const itemName = line.items?.name ?? "Unnamed item";
 
                 return (
@@ -604,7 +670,7 @@ export function FormulaBatchScaler({
                     </td>
                     <td className="py-2 text-center">
                       <span
-                        title={`${formatInventoryAvailability(inventoryAvailability[line.item_id])} on hand`}
+                        title={`${formatInventoryAvailability(itemAvailability?.total)} on hand`}
                         aria-label={
                           hasEnough
                             ? "Inventory is sufficient"
@@ -622,6 +688,9 @@ export function FormulaBatchScaler({
                           <X className="size-4" />
                         )}
                       </span>
+                    </td>
+                    <td className="py-2 text-center">
+                      <InventoryLocationBadge status={location} />
                     </td>
                   </tr>
                 );
@@ -709,8 +778,7 @@ function isWaterIngredient(line: Pick<FormulaLine, "items">) {
 
 /**
  * Match Quantum batching sheets:
- * target lbs = (pct / 100) × batch gal × product density (lbs/gal).
- * Water (lbs/gal) on the sheet is only for converting water weight ↔ volume.
+ * target lbs = (pct/100) × batch gal × (3785.41/453.59237) × (density/water).
  */
 function getPercentageRequiredQuantitiesLbs(
   lines: FormulaLine[],
@@ -726,10 +794,13 @@ function getPercentageRequiredQuantitiesLbs(
     return result;
   }
 
-  const batchWeightLbs = equivalentGallons * densityLbsPerGallon;
   for (const line of lines) {
     if (line.quantity_basis !== "percentage") continue;
-    result[line.id] = (Number(line.quantity) / 100) * batchWeightLbs;
+    result[line.id] = targetWeightLbsFromPercent(
+      Number(line.quantity),
+      equivalentGallons,
+      densityLbsPerGallon,
+    );
   }
 
   return result;
@@ -787,13 +858,20 @@ function getRequiredQuantityDisplay(
   quantity: number,
   preferredUnit: RequiredQtyUnit,
 ): { quantity: number; unit: string } {
-  // Percentage lines are computed as lbs (sheet Target Weight), then converted.
+  // Percentage lines are computed as lbs (sheet Target Weight default).
   if (line.quantity_basis === "percentage") {
+    if (preferredUnit === "native") {
+      return { quantity, unit: "lbs" };
+    }
     const converted = convertQuantity(quantity, "lbs", preferredUnit);
     return {
       quantity: converted ?? quantity,
       unit: preferredUnit,
     };
+  }
+
+  if (preferredUnit === "native") {
+    return { quantity, unit: line.unit_of_measure };
   }
 
   const converted = convertQuantity(
@@ -812,13 +890,14 @@ function formatBasis(
   line: FormulaLine,
   baseQuantity: number,
   baseUnitOfMeasure: string,
+  densityLbsPerGallon: number,
 ) {
   if (line.quantity_basis === "percentage") {
     return `${formatQuantity(line.quantity)}%`;
   }
 
-  // Target-weight lines are stored as per_batch lbs; show sheet-style % of
-  // base batch weight (gal × product density).
+  // Target-weight lines are stored as per_batch weight; show sheet-style %
+  // using the same density/water factor as Excel Target Weight.
   if (
     line.quantity_basis === "per_batch" &&
     isGallonUnit(baseUnitOfMeasure)
@@ -828,9 +907,15 @@ function formatBasis(
       line.unit_of_measure,
       "lbs",
     );
-    const batchWeightLbs = baseQuantity * DEFAULT_DENSITY_LBS_PER_GALLON;
-    if (quantityLbs != null && batchWeightLbs > 0) {
-      return `${formatQuantity((quantityLbs / batchWeightLbs) * 100)}%`;
+    if (quantityLbs != null) {
+      const pct = percentFromTargetWeightLbs(
+        quantityLbs,
+        baseQuantity,
+        densityLbsPerGallon,
+      );
+      if (pct != null) {
+        return `${formatQuantity(pct)}% · ${formatQuantity(line.quantity)} ${line.unit_of_measure}`;
+      }
     }
   }
 
@@ -871,7 +956,7 @@ function applyBuffer(batchAmount: number, bufferPercent: number) {
 }
 
 function getAvailableQuantity(
-  availability: Record<string, number> | undefined,
+  availability: InventoryByUnit | undefined,
   requiredUnit: string,
 ) {
   if (!availability) {
@@ -882,6 +967,110 @@ function getAvailableQuantity(
     const converted = convertQuantity(quantity, unit, requiredUnit);
     return converted === null ? total : total + converted;
   }, 0);
+}
+
+type InventoryLocationKind = "onsite" | "offsite" | "both" | "none";
+
+type InventoryLocationStatus = {
+  kind: InventoryLocationKind;
+  label: string;
+  title: string;
+  needsRetrieval: boolean;
+};
+
+function getInventoryLocationStatus(
+  availability: ItemInventoryAvailability | undefined,
+  requiredUnit: string,
+  requiredQuantity: number,
+): InventoryLocationStatus {
+  const onsiteQty = getAvailableQuantity(availability?.onsite, requiredUnit);
+  const offsiteQty = getAvailableQuantity(availability?.offsite, requiredUnit);
+  const totalQty = getAvailableQuantity(availability?.total, requiredUnit);
+  const breakdown = [
+    onsiteQty > 0 ? `${formatQuantity(onsiteQty)} ${requiredUnit} on-site` : null,
+    offsiteQty > 0
+      ? `${formatQuantity(offsiteQty)} ${requiredUnit} off-site`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("; ");
+
+  if (onsiteQty <= 0 && offsiteQty <= 0) {
+    return {
+      kind: "none",
+      label: "—",
+      title: "No inventory on hand",
+      needsRetrieval: false,
+    };
+  }
+
+  // Enough at plant (Skyway) — no retrieval needed, even if off-site also exists.
+  if (onsiteQty >= requiredQuantity) {
+    return {
+      kind: "onsite",
+      label: "On-site",
+      title: breakdown || "On-site",
+      needsRetrieval: false,
+    };
+  }
+
+  // Requirement only met (or only stocked) using off-site inventory.
+  if (offsiteQty > 0 && totalQty >= requiredQuantity) {
+    return {
+      kind: "offsite",
+      label: "Off-site",
+      title: `${breakdown}. Needs retrieval from off-site.`,
+      needsRetrieval: true,
+    };
+  }
+
+  if (onsiteQty > 0 && offsiteQty > 0) {
+    return {
+      kind: "both",
+      label: "Both",
+      title: `${breakdown}. On-site alone is not enough.`,
+      needsRetrieval: true,
+    };
+  }
+
+  if (offsiteQty > 0) {
+    return {
+      kind: "offsite",
+      label: "Off-site",
+      title: `${breakdown}. Needs retrieval from off-site.`,
+      needsRetrieval: true,
+    };
+  }
+
+  return {
+    kind: "onsite",
+    label: "On-site",
+    title: breakdown || "On-site",
+    needsRetrieval: false,
+  };
+}
+
+function InventoryLocationBadge({ status }: { status: InventoryLocationStatus }) {
+  if (status.kind === "none") {
+    return (
+      <span className="text-muted-foreground" title={status.title}>
+        {status.label}
+      </span>
+    );
+  }
+
+  const className =
+    status.kind === "onsite"
+      ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+      : status.kind === "offsite"
+        ? "bg-amber-50 text-amber-900 border-amber-200"
+        : "bg-sky-50 text-sky-900 border-sky-200";
+
+  return (
+    <Badge className={className} title={status.title}>
+      {status.label}
+    </Badge>
+  );
 }
 
 type WeightUnit = "g" | "kg" | "lbs";
@@ -962,9 +1151,9 @@ function normalizeUnit(unit: string) {
 }
 
 function formatInventoryAvailability(
-  availability: Record<string, number> | undefined,
+  availability: InventoryByUnit | undefined,
 ) {
-  if (!availability) {
+  if (!availability || Object.keys(availability).length === 0) {
     return "0";
   }
 

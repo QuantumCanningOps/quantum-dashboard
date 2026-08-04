@@ -1,6 +1,7 @@
 "use server";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { normalizeSheetUnit } from "@/lib/formula-batching";
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 
@@ -14,7 +15,11 @@ export type ExtractedFormulaLine = {
   quantity?: number;
   unitOfMeasure?: string;
   quantityBasis?: "per_batch" | "per_can" | "percentage";
-  /** Target Weight/Volume from the sheet, in lbs, when present. */
+  /** Target Weight/Volume numeric value from the sheet when present. */
+  targetWeight?: number;
+  /** Unit for targetWeight from the sheet Units column (lbs, g, kg, …). */
+  targetUnit?: string;
+  /** @deprecated Prefer targetWeight + targetUnit. Kept for older model output. */
   targetWeightLbs?: number;
 };
 
@@ -45,8 +50,8 @@ const DEFAULT_SHEET_DENSITY_LBS_PER_GALLON = 8.4;
 
 /**
  * Sheets print rounded % (87.88%) but Target Weight/Volume is authoritative
- * (11073.65 lbs). When target weights exist, store them as per_batch lbs at
- * the sheet batch size so Required Qty can scale exactly.
+ * (11073.65 lbs or 3175.2 g). When target weights exist, store them as
+ * per_batch in the sheet's Units column so Required Qty can scale exactly.
  *
  * Fallback: if only % is present, keep percentage basis (density converts later).
  */
@@ -61,14 +66,28 @@ function refineExtractedLines(data: ExtractedFormulaData): ExtractedFormulaData 
   }
 
   const lines = data.lines.map((line) => {
-    const targetLbs = line.targetWeightLbs;
-    if (targetLbs == null || !Number.isFinite(targetLbs) || targetLbs <= 0) {
-      return line;
+    const targetRaw = line.targetWeight ?? line.targetWeightLbs;
+    if (targetRaw == null || !Number.isFinite(targetRaw) || targetRaw <= 0) {
+      return {
+        ...line,
+        unitOfMeasure:
+          normalizeSheetUnit(line.unitOfMeasure) ?? line.unitOfMeasure,
+      };
     }
+
+    const unit =
+      normalizeSheetUnit(line.targetUnit) ??
+      normalizeSheetUnit(line.unitOfMeasure) ??
+      "lbs";
+    // Target Weight/Volume is never a percent — ignore % as the weight unit.
+    const targetUnit = unit === "%" ? "lbs" : unit;
+
     return {
       ...line,
-      quantity: targetLbs,
-      unitOfMeasure: "lbs",
+      quantity: targetRaw,
+      unitOfMeasure: targetUnit,
+      targetUnit,
+      targetWeight: targetRaw,
       quantityBasis: "per_batch" as const,
     };
   });
@@ -116,12 +135,22 @@ export async function extractFromFormulaPdf(
   "batchingInstructions": "full batching instructions text if present",
   "lines": [
     {
-      "itemDescription": "ingredient or packaging name",
+      "itemDescription": "Filtered Water",
       "lineType": "ingredient",
-      "quantity": 87.88,
+      "quantity": 91.46,
       "unitOfMeasure": "%",
       "quantityBasis": "percentage",
-      "targetWeightLbs": 11073.65
+      "targetWeight": 4579.57741,
+      "targetUnit": "lbs"
+    },
+    {
+      "itemDescription": "Gentian",
+      "lineType": "ingredient",
+      "quantity": 0.1398,
+      "unitOfMeasure": "%",
+      "quantityBasis": "percentage",
+      "targetWeight": 3175.201908,
+      "targetUnit": "g"
     }
   ],
   "specs": [
@@ -137,14 +166,15 @@ export async function extractFromFormulaPdf(
 }
 
 Rules:
-- Prefer percentage rows when the sheet lists ingredient %; set quantityBasis to "percentage", unitOfMeasure to "%", and quantity to the numeric percent.
-- Also extract the Target Weight/Volume column into targetWeightLbs when present (even if a % is shown). Keep full precision from that column (e.g. 11073.65, 55.203).
-- Extract density (lbs/gal) into densityLbsPerGallon and Water (lbs/gal) into waterLbsPerGallon when shown. Target Weight uses product density, not water density.
-- If only weight/volume per batch is available (no %), use quantityBasis "per_batch" with that quantity and its unit (e.g. lbs).
+- Prefer percentage rows when the sheet lists ingredient %; set quantityBasis to "percentage", unitOfMeasure to "%", and quantity to the numeric percent in 0–100 form (91.46 not 0.9146). If the sheet cell is already a percent fraction under 1 for a major ingredient like water (~0.87–0.95), multiply by 100.
+- Also extract the Target Weight/Volume column into targetWeight when present (even if a % is shown). Keep full precision from that column (e.g. 11073.65, 3175.201908).
+- CRITICAL: Extract the Units column for each line into targetUnit. Sheets mix units — commonly "lbs" for water/sugar/acid and "g" for flavors/actives. Do NOT convert grams to pounds. Do NOT default every line to lbs.
+- Extract density (lbs/gal) into densityLbsPerGallon and Water (lbs/gal) into waterLbsPerGallon when shown. Density is often 8.4 but may be 8.345 (same as water) on some sheets.
+- If only weight/volume per batch is available (no %), use quantityBasis "per_batch" with that quantity and its unit from the Units column (lbs or g).
 - Skip total/100% summary rows and blank rows.
 - lineType is usually "ingredient"; use "packaging" only for packaging materials (cans, lids/ends, trays). Packaging lines are saved to the SKU packaging BOM, not formula lines.
 - Parse specs like "2.50-2.60" into minValue/maxValue, and "11.8+/-0.2" into targetValue 11.8 with min/max 11.6/12.0.
-- Normalize units to lowercase common forms (gallons, lbs, oz, %).
+- Normalize units to lowercase common forms (gallons, lbs, g, kg, oz, %).
 - Omit any field you cannot clearly identify.`;
 
     const isPdf =
@@ -321,6 +351,7 @@ export async function createFormula(data: {
   lines: FormulaLineInput[];
   paLetter: FormulaDocumentInput | null;
   artworkFiles: FormulaDocumentInput[];
+  densityLbsPerGallon?: number;
 }): Promise<
   { success: true; id: string } | { success: false; error: string }
 > {
@@ -352,6 +383,18 @@ export async function createFormula(data: {
 
     if (error) throw new Error(error.message);
     if (!formulaId) throw new Error("Formula creation did not return an id");
+
+    const density =
+      data.densityLbsPerGallon != null && data.densityLbsPerGallon > 0
+        ? data.densityLbsPerGallon
+        : null;
+    if (density != null) {
+      const { error: densityError } = await supabase
+        .from("formulas")
+        .update({ density_lbs_per_gallon: density })
+        .eq("id", formulaId);
+      if (densityError) throw new Error(densityError.message);
+    }
 
     revalidatePath("/dashboard/documents");
     revalidatePath("/dashboard/clients");
