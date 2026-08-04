@@ -19,6 +19,10 @@ import {
 } from "./FormulaDocuments";
 import { ImportWarningBanner } from "./ImportWarningBanner";
 import {
+  reservedQuantityForItem,
+  type ReservationLine,
+} from "@/lib/material-readiness";
+import {
   ClientFormulasNav,
   type ClientFormulaNavItem,
 } from "./ClientFormulasNav";
@@ -163,6 +167,7 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
   }));
   const inventoryAvailability = await getInventoryAvailability(
     supabase,
+    formula.client_id,
     formulaLines,
     packagingLineViews,
   );
@@ -385,6 +390,7 @@ function FormulaStatusBadge({ status }: { status: string }) {
 
 async function getInventoryAvailability(
   supabase: Awaited<ReturnType<typeof createClient>>,
+  clientId: string,
   formulaLines: FormulaLine[],
   packagingLines: PackagingLineView[],
 ) {
@@ -399,10 +405,57 @@ async function getInventoryAvailability(
     return {};
   }
 
-  const { data: inventory } = await supabase
-    .from("inventory_on_hand")
-    .select("item_id, unit_of_measure, quantity_on_hand, is_offsite")
-    .in("item_id", itemIds);
+  const [{ data: inventory }, { data: openOrders }] = await Promise.all([
+    supabase
+      .from("inventory_on_hand")
+      .select("item_id, unit_of_measure, quantity_on_hand, is_offsite")
+      .in("item_id", itemIds),
+    // Every open order's reservation — there's no order in progress here
+    // (this is the "if I started a batch right now" calculator), so unlike
+    // per-order readiness, nothing gets excluded.
+    supabase
+      .from("production_orders")
+      .select(
+        "id, batches(id, status, batch_lines(item_id, planned_quantity, unit_of_measure))",
+      )
+      .eq("client_id", clientId)
+      .in("status", ["pending", "scheduled", "in_progress"]),
+  ]);
+
+  const reservationLines: ReservationLine[] = [];
+  for (const order of (openOrders ?? []) as {
+    id: string;
+    batches:
+      | {
+          id: string;
+          status: string;
+          batch_lines:
+            | {
+                item_id: string;
+                planned_quantity: number;
+                unit_of_measure: string;
+              }[]
+            | null;
+        }[]
+      | null;
+  }[]) {
+    for (const batch of order.batches ?? []) {
+      if (
+        batch.status !== "draft" &&
+        batch.status !== "scheduled" &&
+        batch.status !== "in_progress"
+      ) {
+        continue;
+      }
+      for (const line of batch.batch_lines ?? []) {
+        reservationLines.push({
+          itemId: line.item_id,
+          quantity: Number(line.planned_quantity),
+          unitOfMeasure: line.unit_of_measure,
+        });
+      }
+    }
+  }
 
   const availability = (inventory ?? []).reduce((acc, row) => {
     const qty = Number(row.quantity_on_hand);
@@ -413,6 +466,24 @@ async function getInventoryAvailability(
     bucket[row.unit_of_measure] = (bucket[row.unit_of_measure] ?? 0) + qty;
     return acc;
   }, {} as InventoryAvailability);
+
+  // Deplete reserved-elsewhere quantity out of what's shown as available,
+  // on-site first (matches how a run would actually draw down stock), so an
+  // item another open order already claimed doesn't look free to batch again.
+  for (const [itemId, item] of Object.entries(availability)) {
+    for (const uom of Object.keys(item.total)) {
+      const reserved = reservedQuantityForItem(reservationLines, itemId, uom);
+      if (reserved <= 0) continue;
+      const onsiteQty = item.onsite[uom] ?? 0;
+      const onsiteAfter = Math.max(0, onsiteQty - reserved);
+      const remainder = Math.max(0, reserved - onsiteQty);
+      const offsiteQty = item.offsite[uom] ?? 0;
+      const offsiteAfter = Math.max(0, offsiteQty - remainder);
+      item.onsite[uom] = onsiteAfter;
+      item.offsite[uom] = offsiteAfter;
+      item.total[uom] = onsiteAfter + offsiteAfter;
+    }
+  }
 
   for (const line of formulaLines) {
     if (line.items?.name.toLowerCase() !== "filtered water") {
