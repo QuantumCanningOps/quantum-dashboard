@@ -4,6 +4,13 @@ import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import {
+  EditableProductionOrder,
+  type FormulaOption,
+  type SkuOption,
+} from "./EditableProductionOrder";
+import { MaterialReadinessCard } from "../MaterialReadinessCard";
+import type { ProductionOrderStatus } from "../../production-orders/actions";
 
 type DetailPageProps = {
   params: Promise<{ id: string }>;
@@ -18,6 +25,7 @@ type BatchDetail = {
   planned_quantity: number;
   actual_quantity: number | null;
   unit_of_measure: string;
+  notes: string | null;
   tanks: { name: string } | null;
 };
 
@@ -32,14 +40,6 @@ type OrderLine = {
     item_type: string;
     unit_of_measure: string;
   } | null;
-};
-
-type ItemSummary = {
-  item_id: string;
-  quantity_on_hand: number;
-  quantity_reserved: number;
-  quantity_available: number;
-  unit_of_measure: string;
 };
 
 type LotPick = {
@@ -70,13 +70,15 @@ async function ProductionDetail({ params }: DetailPageProps) {
   const [{ data: order }, { data: batchRows }] = await Promise.all([
     supabase
       .from("production_orders")
-      .select("*, clients(name, code), skus(code, name)")
+      .select(
+        "*, clients(name, code), skus(id, code, name), formulas(id, formula_number, name, version, status)",
+      )
       .eq("id", id)
       .single(),
     supabase
       .from("batches")
       .select(
-        "id, batch_number, status, batching_date, canning_date, planned_quantity, actual_quantity, unit_of_measure, tanks(name)",
+        "id, batch_number, status, batching_date, canning_date, planned_quantity, actual_quantity, unit_of_measure, notes, tanks(name)",
       )
       .eq("production_order_id", id)
       .order("created_at", { ascending: false }),
@@ -85,10 +87,30 @@ async function ProductionDetail({ params }: DetailPageProps) {
   if (!order) notFound();
 
   const client = order.clients as unknown as { name: string; code: string } | null;
-  const sku = order.skus as unknown as { name: string; code: string } | null;
+  const sku = order.skus as unknown as {
+    id: string;
+    name: string;
+    code: string;
+  } | null;
+  const formula = order.formulas as unknown as FormulaOption | null;
   const batches = (batchRows ?? []) as unknown as BatchDetail[];
   const batch = batches.find((b) => b.status !== "cancelled") ?? batches[0] ?? null;
   const tank = batch?.tanks ?? null;
+
+  const [{ data: clientSkus }, { data: clientFormulas }] = await Promise.all([
+    supabase
+      .from("skus")
+      .select("id, code, name, formula_id")
+      .eq("client_id", order.client_id)
+      .order("code"),
+    supabase
+      .from("formulas")
+      .select("id, formula_number, name, version, status")
+      .eq("client_id", order.client_id)
+      .order("name")
+      .order("formula_number")
+      .order("version", { ascending: false }),
+  ]);
 
   const { data: lineRows } = batch
     ? await supabase
@@ -100,36 +122,16 @@ async function ProductionDetail({ params }: DetailPageProps) {
     : { data: [] };
 
   const orderLines = (lineRows ?? []) as unknown as OrderLine[];
-  const itemIds = orderLines.map((l) => l.item_id);
   const lineIds = orderLines.map((l) => l.id);
 
-  const [{ data: summaryRows }, { data: lotPickRows }] = await Promise.all([
-    itemIds.length
-      ? supabase
-          .from("inventory_item_summary")
-          .select(
-            "item_id, quantity_on_hand, quantity_reserved, quantity_available, unit_of_measure",
-          )
-          .eq("client_id", order.client_id)
-          .in("item_id", itemIds)
-      : Promise.resolve({ data: [] as unknown[] }),
-    lineIds.length
-      ? supabase
-          .from("batch_lot_picks")
-          .select(
-            "id, batch_line_id, quantity, unit_of_measure, lots(id, lot_number, expiration_date, status)",
-          )
-          .in("batch_line_id", lineIds)
-      : Promise.resolve({ data: [] as unknown[] }),
-  ]);
-
-  const summaryByItem = ((summaryRows ?? []) as ItemSummary[]).reduce(
-    (acc, row) => {
-      acc[row.item_id] = row;
-      return acc;
-    },
-    {} as Record<string, ItemSummary>,
-  );
+  const { data: lotPickRows } = lineIds.length
+    ? await supabase
+        .from("batch_lot_picks")
+        .select(
+          "id, batch_line_id, quantity, unit_of_measure, lots(id, lot_number, expiration_date, status)",
+        )
+        .in("batch_line_id", lineIds)
+    : { data: [] as unknown[] };
 
   const picksByLine = ((lotPickRows ?? []) as unknown as LotPick[]).reduce(
     (acc, pick) => {
@@ -139,21 +141,11 @@ async function ProductionDetail({ params }: DetailPageProps) {
     {} as Record<string, LotPick[]>,
   );
 
-  // Sort lines: ingredients first, then packaging (derived from item_type)
-  const sortedLines = [...orderLines].sort((a, b) => {
-    const typeOrder: Record<string, number> = {
-      raw_ingredient: 0,
-      wip: 1,
-      packaging: 2,
-      finished_good: 3,
-    };
-    const ta = typeOrder[a.items?.item_type ?? ""] ?? 9;
-    const tb = typeOrder[b.items?.item_type ?? ""] ?? 9;
-    return ta - tb;
-  });
+  const linesWithPicks = orderLines.filter(
+    (line) => (picksByLine[line.id] ?? []).length > 0,
+  );
 
-  const isActive =
-    batch?.status === "scheduled" || batch?.status === "in_progress";
+  const orderStatus = order.status as ProductionOrderStatus;
 
   return (
     <div className="flex flex-col gap-6">
@@ -164,50 +156,70 @@ async function ProductionDetail({ params }: DetailPageProps) {
         >
           ← Production orders
         </Link>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="font-mono text-2xl font-bold">{order.order_number}</h1>
-          <StatusBadge status={order.status} />
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {client?.name}
-          {sku ? (
-            <>
-              {" · "}
-              <span className="font-medium text-foreground">{sku.name}</span>
-              <span className="ml-1 font-mono text-xs">{sku.code}</span>
-            </>
-          ) : null}
-        </p>
-        {batch?.batch_number && (
-          <p className="font-mono text-xs text-muted-foreground">
-            Batch{" "}
-            <span className="font-medium text-foreground">
-              {batch.batch_number}
-            </span>
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="font-mono text-2xl font-bold">
+              {order.order_number}
+            </h1>
+            <StatusBadge status={order.status} />
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {client?.name}
+            {sku ? (
+              <>
+                {" · "}
+                <span className="font-medium text-foreground">{sku.name}</span>
+                <span className="ml-1 font-mono text-xs">{sku.code}</span>
+              </>
+            ) : null}
+            {formula ? (
+              <>
+                {" · "}
+                <Link
+                  href={`/dashboard/formulas/${formula.id}`}
+                  className="hover:underline"
+                >
+                  {formula.formula_number ??
+                    formula.name ??
+                    `Formula v${formula.version}`}
+                </Link>
+              </>
+            ) : null}
           </p>
-        )}
+          {batch?.batch_number && (
+            <p className="font-mono text-xs text-muted-foreground">
+              Batch{" "}
+              <span className="font-medium text-foreground">
+                {batch.batch_number}
+              </span>
+            </p>
+          )}
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+      <EditableProductionOrder
+        orderId={order.id}
+        orderNumber={order.order_number}
+        status={orderStatus}
+        skuId={order.sku_id}
+        formulaId={order.formula_id}
+        orderedQuantity={Number(order.ordered_quantity)}
+        unitOfMeasure={order.unit_of_measure}
+        actualQuantity={
+          order.actual_quantity != null ? Number(order.actual_quantity) : null
+        }
+        notes={order.notes}
+        skus={(clientSkus ?? []) as SkuOption[]}
+        formulas={(clientFormulas ?? []) as FormulaOption[]}
+      />
+
+      <MaterialReadinessCard orderId={order.id} />
+
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Ordered
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <span className="text-2xl font-bold">
-              {Number(order.ordered_quantity).toLocaleString()}
-            </span>
-            <span className="ml-1.5 text-sm text-muted-foreground">
-              {order.unit_of_measure}
-            </span>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Actual
+              Batch actual
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -273,237 +285,103 @@ async function ProductionDetail({ params }: DetailPageProps) {
         </Card>
       </div>
 
-      {(order.notes || batch?.notes) && (
+      {batch?.notes && (
         <Card>
-          <CardContent className="flex flex-col gap-1 pt-4 text-sm text-muted-foreground">
-            {order.notes && <p>{order.notes}</p>}
-            {batch?.notes && order.notes !== batch.notes && (
-              <p>{batch.notes}</p>
-            )}
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Batch notes
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-muted-foreground">
+            {batch.notes}
           </CardContent>
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            {isActive ? "Inventory Requirements" : "Bill of Materials"}
-          </CardTitle>
-          {isActive && (
-            <p className="text-sm text-muted-foreground">
-              On Hand and Available reflect current inventory including all
-              active reservations.
+      {linesWithPicks.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Lot assignments</CardTitle>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Lots picked against this order&apos;s batch lines.
             </p>
-          )}
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-muted-foreground">
-                  <th className="pb-2 text-left font-medium">Item</th>
-                  <th className="pb-2 text-left font-medium">Type</th>
-                  <th className="pb-2 text-right font-medium">Planned</th>
-                  {order.status === "complete" && (
-                    <th className="pb-2 text-right font-medium">Actual</th>
-                  )}
-                  {isActive && (
-                    <>
-                      <th className="pb-2 text-right font-medium">On Hand</th>
-                      <th className="pb-2 text-right font-medium">Reserved</th>
-                      <th className="pb-2 text-right font-medium">Available</th>
-                    </>
-                  )}
-                  <th className="pb-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {sortedLines.map((line) => {
-                  const inv = summaryByItem[line.item_id];
-                  const picks = picksByLine[line.id] ?? [];
-                  return (
-                    <tr
-                      key={line.id}
-                      className="border-b last:border-0 hover:bg-muted/30"
-                    >
-                      <td className="py-2 pr-4">
-                        <div className="flex flex-col gap-0.5">
-                          {line.items?.name ? (
-                            <Link
-                              href={`/dashboard/inventory?clientId=${order.client_id}&itemId=${line.item_id}`}
-                              className="font-medium hover:underline"
-                            >
-                              {line.items.name}
-                            </Link>
-                          ) : (
-                            <span className="font-medium">—</span>
-                          )}
-                          {picks.map((pick) => {
-                            const lot = pick.lots;
-                            if (!lot) return null;
-                            const isWarning =
-                              lot.status === "on_hold" ||
-                              lot.status === "quarantine";
-                            const expLabel = lot.expiration_date
-                              ? new Date(
-                                  lot.expiration_date,
-                                ).toLocaleDateString(undefined, {
-                                  month: "short",
-                                  year: "numeric",
-                                })
-                              : null;
-                            return (
-                              <Link
-                                key={pick.id}
-                                href={`/dashboard/lots/${lot.id}`}
-                                className={`flex items-baseline gap-1.5 text-xs hover:underline ${
-                                  isWarning
-                                    ? "text-amber-700 hover:text-amber-900"
-                                    : "text-muted-foreground hover:text-foreground"
-                                }`}
-                              >
-                                <span className="shrink-0 select-none text-muted-foreground/40">
-                                  ↳
-                                </span>
-                                <span className="font-mono">
-                                  {lot.lot_number}
-                                </span>
-                                <span className="tabular-nums">
-                                  {Number(pick.quantity).toLocaleString()}{" "}
-                                  {pick.unit_of_measure}
-                                </span>
-                                {expLabel && (
-                                  <span className="text-muted-foreground/70">
-                                    exp {expLabel}
-                                  </span>
-                                )}
-                                {isWarning && (
-                                  <span className="font-medium">
-                                    (
-                                    {lot.status === "on_hold"
-                                      ? "on hold"
-                                      : "quarantine"}
-                                    )
-                                  </span>
-                                )}
-                              </Link>
-                            );
-                          })}
-                        </div>
-                      </td>
-                      <td className="py-2 pr-4 align-top">
-                        <ItemTypeBadge type={line.items?.item_type ?? ""} />
-                      </td>
-                      <td className="py-2 pr-4 text-right align-top tabular-nums">
-                        {Number(line.planned_quantity).toLocaleString()}{" "}
-                        <span className="text-muted-foreground">
-                          {line.unit_of_measure}
-                        </span>
-                      </td>
-                      {order.status === "complete" && (
-                        <td className="py-2 pr-4 text-right align-top tabular-nums">
-                          {line.actual_quantity != null ? (
-                            <>
-                              {Number(line.actual_quantity).toLocaleString()}{" "}
-                              <span className="text-muted-foreground">
-                                {line.unit_of_measure}
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                      )}
-                      {isActive && (
-                        <>
-                          <td className="py-2 pr-4 text-right align-top tabular-nums">
-                            {inv ? (
-                              <>
-                                {Number(inv.quantity_on_hand).toLocaleString()}{" "}
-                                <span className="text-muted-foreground">
-                                  {inv.unit_of_measure}
-                                </span>
-                              </>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </td>
-                          <td className="py-2 pr-4 text-right align-top tabular-nums">
-                            {inv && inv.quantity_reserved > 0 ? (
-                              <span className="text-amber-700">
-                                {Number(inv.quantity_reserved).toLocaleString()}{" "}
-                                <span className="font-normal text-muted-foreground">
-                                  {inv.unit_of_measure}
-                                </span>
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </td>
-                          <td className="py-2 pr-4 text-right align-top tabular-nums font-medium">
-                            {inv ? (
-                              <AvailableQty inv={inv} />
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </td>
-                        </>
-                      )}
-                      <td className="py-2 text-right align-top">
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col gap-3 text-sm">
+              {linesWithPicks.map((line) => {
+                const picks = picksByLine[line.id] ?? [];
+                return (
+                  <li key={line.id} className="flex flex-col gap-1">
+                    <div className="font-medium">
+                      {line.items?.name ? (
                         <Link
                           href={`/dashboard/inventory?clientId=${order.client_id}&itemId=${line.item_id}`}
-                          className="whitespace-nowrap text-xs text-muted-foreground hover:text-foreground hover:underline"
+                          className="hover:underline"
                         >
-                          View lots →
+                          {line.items.name}
                         </Link>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {sortedLines.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={8}
-                      className="py-8 text-center text-sm text-muted-foreground"
-                    >
-                      No lines on this order.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+                      ) : (
+                        "—"
+                      )}
+                    </div>
+                    <ul className="flex flex-col gap-0.5">
+                      {picks.map((pick) => {
+                        const lot = pick.lots;
+                        if (!lot) return null;
+                        const isWarning =
+                          lot.status === "on_hold" ||
+                          lot.status === "quarantine";
+                        const expLabel = lot.expiration_date
+                          ? new Date(lot.expiration_date).toLocaleDateString(
+                              undefined,
+                              { month: "short", year: "numeric" },
+                            )
+                          : null;
+                        return (
+                          <li key={pick.id}>
+                            <Link
+                              href={`/dashboard/lots/${lot.id}`}
+                              className={`flex items-baseline gap-1.5 text-xs hover:underline ${
+                                isWarning
+                                  ? "text-amber-700 hover:text-amber-900"
+                                  : "text-muted-foreground hover:text-foreground"
+                              }`}
+                            >
+                              <span className="shrink-0 select-none text-muted-foreground/40">
+                                ↳
+                              </span>
+                              <span className="font-mono">{lot.lot_number}</span>
+                              <span className="tabular-nums">
+                                {Number(pick.quantity).toLocaleString()}{" "}
+                                {pick.unit_of_measure}
+                              </span>
+                              {expLabel && (
+                                <span className="text-muted-foreground/70">
+                                  exp {expLabel}
+                                </span>
+                              )}
+                              {isWarning && (
+                                <span className="font-medium">
+                                  (
+                                  {lot.status === "on_hold"
+                                    ? "on hold"
+                                    : "quarantine"}
+                                  )
+                                </span>
+                              )}
+                            </Link>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </li>
+                );
+              })}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
     </div>
-  );
-}
-
-function AvailableQty({ inv }: { inv: ItemSummary }) {
-  const qty = Number(inv.quantity_available);
-  const uom = (
-    <span className="font-normal text-muted-foreground">
-      {inv.unit_of_measure}
-    </span>
-  );
-  if (qty < 0) {
-    return (
-      <span className="text-red-600">
-        {qty.toLocaleString()} {uom}
-      </span>
-    );
-  }
-  if (inv.quantity_reserved > 0) {
-    return (
-      <span className="text-green-700">
-        {qty.toLocaleString()} {uom}
-      </span>
-    );
-  }
-  return (
-    <span>
-      {qty.toLocaleString()} {uom}
-    </span>
   );
 }
 
@@ -561,22 +439,3 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function ItemTypeBadge({ type }: { type: string }) {
-  const map: Record<string, string> = {
-    raw_ingredient: "bg-blue-50 text-blue-700 border-blue-200",
-    packaging: "bg-violet-50 text-violet-700 border-violet-200",
-    wip: "bg-orange-50 text-orange-700 border-orange-200",
-    finished_good: "bg-teal-50 text-teal-700 border-teal-200",
-  };
-  const labels: Record<string, string> = {
-    raw_ingredient: "Ingredient",
-    packaging: "Packaging",
-    wip: "WIP",
-    finished_good: "Finished",
-  };
-  return (
-    <Badge className={map[type] ?? "bg-gray-100 text-gray-600 border-gray-200"}>
-      {labels[type] ?? type}
-    </Badge>
-  );
-}

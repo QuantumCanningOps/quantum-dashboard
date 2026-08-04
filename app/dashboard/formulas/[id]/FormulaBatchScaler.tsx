@@ -81,6 +81,8 @@ type FormulaBatchScalerProps = {
   baseUnitOfMeasure: string;
   clientId: string;
   formulaId: string;
+  /** Linked SKU for this formula, when present — used to prefill create-PO. */
+  skuId?: string | null;
   lines: FormulaLine[];
   packagingLines?: PackagingLineView[];
   items: ItemOption[];
@@ -108,6 +110,7 @@ export function FormulaBatchScaler({
   baseUnitOfMeasure,
   clientId,
   formulaId,
+  skuId = null,
   lines,
   packagingLines = [],
   items: initialItems,
@@ -424,6 +427,18 @@ export function FormulaBatchScaler({
               </Button>
             ))}
           </div>
+          {batchAmount > 0 && (
+            <Button type="button" size="sm" className="self-start" asChild>
+              <Link
+                href={`/dashboard/production-orders/new?clientId=${clientId}&formulaId=${formulaId}${
+                  skuId ? `&skuId=${skuId}` : ""
+                }&quantity=${encodeURIComponent(String(batchAmount))}&uom=${encodeURIComponent(batchUnit)}`}
+              >
+                Create production order ({formatQuantity(batchAmount)}{" "}
+                {batchUnit})
+              </Link>
+            </Button>
+          )}
         </div>
         )}
         {showsDensityControl && (

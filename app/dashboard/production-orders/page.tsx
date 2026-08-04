@@ -3,6 +3,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { Suspense } from "react";
+import {
+  availableQuantityForItem,
+  buildScaledRequirements,
+  type IngredientQuantityBasis,
+  type InventoryAvailabilityRow,
+} from "@/lib/material-readiness";
 
 type PageProps = {
   searchParams?: Promise<{
@@ -28,8 +34,8 @@ type OrderRow = {
     code: string;
     name: string;
     sku_packaging:
-      | { cans_per_tray: number }
-      | { cans_per_tray: number }[]
+      | { cans_per_tray: number; can_size_oz: number | null }
+      | { cans_per_tray: number; can_size_oz: number | null }[]
       | null;
   } | null;
   formulas: {
@@ -38,11 +44,21 @@ type OrderRow = {
     version: number;
     base_quantity: number | null;
     base_unit_of_measure: string | null;
+    density_lbs_per_gallon: number | null;
   } | null;
   batches: { id: string; batch_number: string | null; status: string }[] | null;
 };
 
 type MaterialStatus = "sufficient" | "short" | "unknown";
+
+type NamedItem = { name: string };
+
+function asNamedItem(
+  value: NamedItem | NamedItem[] | null | undefined,
+): NamedItem | null {
+  if (!value) return null;
+  return Array.isArray(value) ? (value[0] ?? null) : value;
+}
 
 const STATUS_OPTIONS = ["pending", "scheduled", "in_progress", "complete", "cancelled"];
 
@@ -65,7 +81,7 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
   let query = supabase
     .from("production_orders")
     .select(
-      "id, client_id, formula_id, sku_id, order_number, ordered_quantity, actual_quantity, unit_of_measure, status, created_at, clients(name, code), skus(code, name, sku_packaging(cans_per_tray)), formulas(formula_number, name, version, base_quantity, base_unit_of_measure), batches(id, batch_number, status)"
+      "id, client_id, formula_id, sku_id, order_number, ordered_quantity, actual_quantity, unit_of_measure, status, created_at, clients(name, code), skus(code, name, sku_packaging(cans_per_tray, can_size_oz)), formulas(formula_number, name, version, base_quantity, base_unit_of_measure, density_lbs_per_gallon), batches(id, batch_number, status)"
     )
     .order("created_at", { ascending: false });
 
@@ -115,16 +131,35 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
     pendingBatchIds.length
       ? supabase
           .from("batch_lines")
-          .select("batch_id, item_id, planned_quantity")
+          .select("batch_id, item_id, planned_quantity, unit_of_measure, items(name)")
           .in("batch_id", pendingBatchIds)
-      : Promise.resolve({ data: [] as { batch_id: string; item_id: string; planned_quantity: number }[] }),
+      : Promise.resolve({
+          data: [] as {
+            batch_id: string;
+            item_id: string;
+            planned_quantity: number;
+            unit_of_measure: string;
+            items: { name: string } | null;
+          }[],
+        }),
     pendingFormulaIds.length
       ? supabase
           .from("formula_lines")
-          .select("formula_id, item_id, quantity")
+          .select(
+            "formula_id, item_id, quantity, unit_of_measure, quantity_basis, items(name)",
+          )
           .eq("line_type", "ingredient")
           .in("formula_id", pendingFormulaIds)
-      : Promise.resolve({ data: [] as { formula_id: string; item_id: string; quantity: number }[] }),
+      : Promise.resolve({
+          data: [] as {
+            formula_id: string;
+            item_id: string;
+            quantity: number;
+            unit_of_measure: string;
+            quantity_basis: IngredientQuantityBasis;
+            items: { name: string } | null;
+          }[],
+        }),
   ]);
 
   const pendingSkuIds = [
@@ -133,9 +168,20 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
   const { data: packagingLineRows } = pendingSkuIds.length
     ? await supabase
         .from("sku_packaging_lines")
-        .select("packaging_id, item_id, quantity, quantity_basis")
+        .select(
+          "packaging_id, item_id, quantity, unit_of_measure, quantity_basis, items(name)",
+        )
         .in("packaging_id", pendingSkuIds)
-    : { data: [] as { packaging_id: string; item_id: string; quantity: number; quantity_basis: string }[] };
+    : {
+        data: [] as {
+          packaging_id: string;
+          item_id: string;
+          quantity: number;
+          unit_of_measure: string;
+          quantity_basis: string;
+          items: { name: string } | null;
+        }[],
+      };
 
   const batchItemIds = (batchLineRows ?? []).map((l) => l.item_id);
   const formulaItemIds = (formulaLineRows ?? []).map((l) => l.item_id);
@@ -145,46 +191,128 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
   ];
   const clientIds = [...new Set(pendingOrders.map((o) => o.client_id))];
 
+  // Use on-hand (not net-of-reservations) so readiness matches the formula
+  // batch scaler the operator just checked.
   const { data: invRows } = allItemIds.length
     ? await supabase
         .from("inventory_item_summary")
-        .select("client_id, item_id, quantity_available")
+        .select("client_id, item_id, item_name, unit_of_measure, quantity_on_hand")
         .in("item_id", allItemIds)
         .in("client_id", clientIds)
-    : { data: [] as { client_id: string; item_id: string; quantity_available: number }[] };
+    : {
+        data: [] as {
+          client_id: string;
+          item_id: string;
+          item_name: string;
+          unit_of_measure: string;
+          quantity_on_hand: number;
+        }[],
+      };
 
-  const invAvail: Record<string, number> = {};
+  const invByClient: Record<string, InventoryAvailabilityRow[]> = {};
   for (const row of invRows ?? []) {
-    invAvail[`${row.client_id}:${row.item_id}`] = Number(row.quantity_available);
+    (invByClient[row.client_id] ??= []).push({
+      itemId: row.item_id,
+      itemName: row.item_name,
+      unitOfMeasure: row.unit_of_measure,
+      quantity: Number(row.quantity_on_hand),
+    });
   }
 
-  const linesByBatch: Record<string, { item_id: string; planned_quantity: number }[]> = {};
-  for (const line of batchLineRows ?? []) {
-    (linesByBatch[line.batch_id] ??= []).push(line);
+  const linesByBatch: Record<
+    string,
+    {
+      item_id: string;
+      planned_quantity: number;
+      unit_of_measure: string;
+      items: NamedItem | null;
+    }[]
+  > = {};
+  for (const line of (batchLineRows ?? []) as unknown as {
+    batch_id: string;
+    item_id: string;
+    planned_quantity: number;
+    unit_of_measure: string;
+    items: NamedItem | NamedItem[] | null;
+  }[]) {
+    (linesByBatch[line.batch_id] ??= []).push({
+      item_id: line.item_id,
+      planned_quantity: Number(line.planned_quantity),
+      unit_of_measure: line.unit_of_measure,
+      items: asNamedItem(line.items),
+    });
   }
 
-  const linesByFormula: Record<string, { item_id: string; quantity: number }[]> = {};
-  for (const line of formulaLineRows ?? []) {
-    (linesByFormula[line.formula_id] ??= []).push(line);
+  const linesByFormula: Record<
+    string,
+    {
+      item_id: string;
+      quantity: number;
+      unit_of_measure: string;
+      quantity_basis: IngredientQuantityBasis;
+      items: NamedItem | null;
+    }[]
+  > = {};
+  for (const line of (formulaLineRows ?? []) as unknown as {
+    formula_id: string;
+    item_id: string;
+    quantity: number;
+    unit_of_measure: string;
+    quantity_basis: IngredientQuantityBasis;
+    items: NamedItem | NamedItem[] | null;
+  }[]) {
+    (linesByFormula[line.formula_id] ??= []).push({
+      item_id: line.item_id,
+      quantity: Number(line.quantity),
+      unit_of_measure: line.unit_of_measure,
+      quantity_basis: line.quantity_basis ?? "per_batch",
+      items: asNamedItem(line.items),
+    });
   }
 
   const linesBySku: Record<
     string,
-    { item_id: string; quantity: number; quantity_basis: string }[]
+    {
+      item_id: string;
+      quantity: number;
+      unit_of_measure: string;
+      quantity_basis: string;
+      items: NamedItem | null;
+    }[]
   > = {};
-  for (const line of packagingLineRows ?? []) {
-    (linesBySku[line.packaging_id] ??= []).push(line);
+  for (const line of (packagingLineRows ?? []) as unknown as {
+    packaging_id: string;
+    item_id: string;
+    quantity: number;
+    unit_of_measure: string;
+    quantity_basis: string;
+    items: NamedItem | NamedItem[] | null;
+  }[]) {
+    (linesBySku[line.packaging_id] ??= []).push({
+      item_id: line.item_id,
+      quantity: Number(line.quantity),
+      unit_of_measure: line.unit_of_measure,
+      quantity_basis: line.quantity_basis,
+      items: asNamedItem(line.items),
+    });
   }
 
   const materialStatus: Record<string, MaterialStatus> = {};
   for (const order of pendingOrders) {
     const batchId = batchIdForOrder[order.id];
     const batchLines = batchId ? (linesByBatch[batchId] ?? []) : [];
+    const clientInventory = invByClient[order.client_id] ?? [];
 
     if (batchLines.length > 0) {
-      const hasShortage = batchLines.some(
-        (line) => (invAvail[`${order.client_id}:${line.item_id}`] ?? 0) < Number(line.planned_quantity)
-      );
+      const hasShortage = batchLines.some((line) => {
+        const available = availableQuantityForItem(
+          clientInventory,
+          line.item_id,
+          line.unit_of_measure,
+          line.items?.name,
+        );
+        return available < Number(line.planned_quantity);
+      });
       materialStatus[order.id] = hasShortage ? "short" : "sufficient";
       continue;
     }
@@ -206,38 +334,53 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
     const skuPackaging = Array.isArray(order.skus?.sku_packaging)
       ? order.skus?.sku_packaging[0]
       : order.skus?.sku_packaging;
-    const cansPerTray = skuPackaging?.cans_per_tray ?? 24;
-    const orderGallons = toGallons(
-      order.ordered_quantity,
-      order.unit_of_measure,
-      cansPerTray,
-    );
-    const baseGallons = toGallons(baseQty, baseUom, cansPerTray);
-    if (orderGallons === null || baseGallons === null || baseGallons === 0) {
+
+    const requirements = buildScaledRequirements({
+      orderQuantity: Number(order.ordered_quantity),
+      orderUnitOfMeasure: order.unit_of_measure,
+      baseQuantity: Number(baseQty),
+      baseUnitOfMeasure: baseUom,
+      cansPerTray: skuPackaging?.cans_per_tray,
+      canSizeOz:
+        skuPackaging?.can_size_oz != null
+          ? Number(skuPackaging.can_size_oz)
+          : null,
+      densityLbsPerGallon:
+        order.formulas?.density_lbs_per_gallon != null
+          ? Number(order.formulas.density_lbs_per_gallon)
+          : null,
+      ingredients: formulaLines.map((line) => ({
+        itemId: line.item_id,
+        itemName: line.items?.name ?? "",
+        quantity: Number(line.quantity),
+        unitOfMeasure: line.unit_of_measure,
+        quantityBasis: line.quantity_basis,
+      })),
+      packaging: packagingLines.map((line) => ({
+        itemId: line.item_id,
+        itemName: line.items?.name ?? "",
+        quantity: Number(line.quantity),
+        unitOfMeasure: line.unit_of_measure,
+        quantityBasis: line.quantity_basis,
+      })),
+    });
+
+    if (!requirements) {
       materialStatus[order.id] = "unknown";
       continue;
     }
 
-    const scale = orderGallons / baseGallons;
-    const filledCans = Math.ceil(
-      (orderGallons * 128) / 12,
-    );
-    const ingredientShort = formulaLines.some(
-      (line) =>
-        (invAvail[`${order.client_id}:${line.item_id}`] ?? 0) <
-        Number(line.quantity) * scale,
-    );
-    const packagingShort = packagingLines.some((line) => {
-      const required = packagingRequiredQty(
-        Number(line.quantity),
-        line.quantity_basis,
-        filledCans,
-        cansPerTray,
+    const hasShortage = requirements.some((req) => {
+      if (req.unlimited) return false;
+      const available = availableQuantityForItem(
+        clientInventory,
+        req.itemId,
+        req.unitOfMeasure,
+        req.itemName,
       );
-      return (invAvail[`${order.client_id}:${line.item_id}`] ?? 0) < required;
+      return available < req.required;
     });
-    materialStatus[order.id] =
-      ingredientShort || packagingShort ? "short" : "sufficient";
+    materialStatus[order.id] = hasShortage ? "short" : "sufficient";
   }
 
   return (
@@ -303,7 +446,12 @@ async function ProductionOrdersContent({ searchParams }: PageProps) {
                     className="border-b last:border-0 hover:bg-muted/30"
                   >
                     <td className="py-2 pr-4 font-mono text-xs font-medium">
-                      {order.order_number}
+                      <Link
+                        href={`/dashboard/production/${order.id}`}
+                        className="hover:underline"
+                      >
+                        {order.order_number}
+                      </Link>
                     </td>
                     <td className="py-2 pr-4">
                       {(() => {
@@ -450,46 +598,6 @@ function Filters({
   );
 }
 
-function toGallons(
-  qty: number,
-  uom: string,
-  cansPerTray: number = 24,
-): number | null {
-  switch (uom.toLowerCase()) {
-    case "gal":
-    case "gallon":
-    case "gallons":
-      return qty;
-    case "can":
-    case "cans":
-      return (qty * 12) / 128;
-    case "case":
-    case "cases":
-      return (qty * cansPerTray * 12) / 128;
-    default:
-      return null;
-  }
-}
-
-function packagingRequiredQty(
-  quantity: number,
-  basis: string,
-  filledCans: number,
-  cansPerTray: number,
-) {
-  switch (basis) {
-    case "per_can":
-      return Math.ceil(filledCans * quantity);
-    case "per_tray":
-    case "per_case":
-      return Math.ceil(Math.ceil(filledCans / cansPerTray) * quantity);
-    case "per_unit":
-      return Math.ceil(quantity);
-    default:
-      return Math.ceil(filledCans * quantity);
-  }
-}
-
 function MaterialsBadge({
   status,
   orderId,
@@ -501,10 +609,16 @@ function MaterialsBadge({
     return <span className="text-xs text-muted-foreground">—</span>;
   }
   if (status === "sufficient") {
-    return <Badge className="bg-green-50 text-green-700 border-green-200">Ready</Badge>;
+    return (
+      <Link href={`/dashboard/production/${orderId}#material-readiness`}>
+        <Badge className="bg-green-50 text-green-700 border-green-200 hover:bg-green-100 cursor-pointer">
+          Ready
+        </Badge>
+      </Link>
+    );
   }
   return (
-    <Link href={`/dashboard/production-orders/${orderId}/readiness`}>
+    <Link href={`/dashboard/production/${orderId}#material-readiness`}>
       <Badge className="bg-red-50 text-red-700 border-red-200 hover:bg-red-100 cursor-pointer">
         Short
       </Badge>

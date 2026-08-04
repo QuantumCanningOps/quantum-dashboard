@@ -238,15 +238,25 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
                 {formula.base_unit_of_measure}
               </p>
             </div>
-            <DeleteFormulaButton
-              formulaId={formula.id}
-              formulaLabel={
-                formula.name ??
-                formula.formula_number ??
-                skus?.[0]?.name ??
-                "this formula"
-              }
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href={`/dashboard/production-orders/new?clientId=${formula.client_id}&formulaId=${formula.id}${
+                  linkedSkuId ? `&skuId=${linkedSkuId}` : ""
+                }`}
+                className="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow hover:bg-primary/90"
+              >
+                Create production order
+              </Link>
+              <DeleteFormulaButton
+                formulaId={formula.id}
+                formulaLabel={
+                  formula.name ??
+                  formula.formula_number ??
+                  skus?.[0]?.name ??
+                  "this formula"
+                }
+              />
+            </div>
           </div>
         </div>
 
@@ -287,6 +297,7 @@ async function FormulaDetail({ params, searchParams }: FormulaPageProps) {
           baseUnitOfMeasure={formula.base_unit_of_measure}
           clientId={formula.client_id}
           formulaId={formula.id}
+          skuId={linkedSkuId}
           lines={formulaLines}
           packagingLines={packagingLineViews}
           items={(items ?? []) as ItemOption[]}

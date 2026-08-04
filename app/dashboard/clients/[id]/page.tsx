@@ -337,9 +337,16 @@ async function ClientDetail({ params }: DetailPageProps) {
               </span>
             )}
           </CardTitle>
-          <ButtonLink href={`/dashboard/production-orders?clientId=${id}`}>
-            View all →
-          </ButtonLink>
+          <div className="flex shrink-0 items-center gap-3">
+            <ButtonLink
+              href={`/dashboard/production-orders/new?clientId=${id}`}
+            >
+              + New Order
+            </ButtonLink>
+            <ButtonLink href={`/dashboard/production-orders?clientId=${id}`}>
+              View all →
+            </ButtonLink>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
